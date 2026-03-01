@@ -17,8 +17,17 @@
 
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, createMemo, onMount } from "solid-js"
-import { basename } from "path"
-import { scanDirectory, readFileContent, writeFileContent, toggleDirectory, gutterWidth, splitLines, type FileEntry } from "./lib/files"
+import { basename, resolve } from "path"
+import { existsSync } from "fs"
+import {
+  scanDirectory,
+  readFileContent,
+  writeFileContent,
+  toggleDirectory,
+  gutterWidth,
+  splitLines,
+  type FileEntry,
+} from "./lib/files"
 import FileTree from "./components/FileTree"
 import CodeViewer from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
@@ -31,6 +40,32 @@ preloadHighlighter()
 
 /** Working directory used as project root */
 const CWD = process.cwd()
+
+// -- CLI argument parsing: --file / -f <path> --
+
+/** Parse --file or -f argument from process.argv */
+function parseSingleFileArg(): string | null {
+  const args = process.argv.slice(2)
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--file" || args[i] === "-f") {
+      const filePath = args[i + 1]
+      if (!filePath) {
+        console.error("Error: --file / -f requires a file path argument")
+        process.exit(1)
+      }
+      const resolved = resolve(CWD, filePath)
+      if (!existsSync(resolved)) {
+        console.error(`Error: file not found: ${resolved}`)
+        process.exit(1)
+      }
+      return resolved
+    }
+  }
+  return null
+}
+
+/** If set, IDE opens in single-file mode (no sidebar, no tabs) */
+const SINGLE_FILE = parseSingleFileArg()
 
 /** Sidebar width constraints (in terminal columns) */
 const MIN_SIDEBAR = 15
@@ -49,22 +84,27 @@ const App = () => {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
 
+  /** Whether app is in single-file mode (no sidebar, no tabs) */
+  const singleFileMode = SINGLE_FILE !== null
+
   // -- State --
 
-  /** File tree entries (recursive structure from scanDirectory) */
-  const [files, setFiles] = createSignal(scanDirectory(CWD))
+  /** File tree entries (recursive structure from scanDirectory) — unused in single-file mode */
+  const [files, setFiles] = createSignal(singleFileMode ? [] : scanDirectory(CWD))
 
   /** Which panel has keyboard focus */
-  const [activePanel, setActivePanel] = createSignal<"tree" | "editor">("tree")
+  const [activePanel, setActivePanel] = createSignal<"tree" | "editor">(singleFileMode ? "editor" : "tree")
 
   /** Currently displayed file path (null = no file open) */
-  const [openFile, setOpenFile] = createSignal<string | null>(null)
+  const [openFile, setOpenFile] = createSignal<string | null>(SINGLE_FILE)
 
   /** Raw text content of the open file */
-  const [fileContent, setFileContent] = createSignal("")
+  const [fileContent, setFileContent] = createSignal(SINGLE_FILE ? readFileContent(SINGLE_FILE) : "")
 
   /** Open tabs (one per opened file) */
-  const [tabs, setTabs] = createSignal<Tab[]>([])
+  const [tabs, setTabs] = createSignal<Tab[]>(
+    SINGLE_FILE ? [{ path: SINGLE_FILE, name: basename(SINGLE_FILE), mode: "pinned" }] : []
+  )
 
   /** Current sidebar width in columns (user-resizable via drag handle) */
   const [sidebarWidth, setSidebarWidth] = createSignal(30)
@@ -148,9 +188,7 @@ const App = () => {
    * A pinned tab won't be replaced by the next file click.
    */
   const pinTab = (path: string) => {
-    setTabs(
-      tabs().map((t) => (t.path === path ? { ...t, mode: "pinned" as const } : t))
-    )
+    setTabs(tabs().map((t) => (t.path === path ? { ...t, mode: "pinned" as const } : t)))
   }
 
   /**
@@ -227,15 +265,17 @@ const App = () => {
   let sidebarScrollRef: any
 
   onMount(() => {
-    // Post-mount patch: enable horizontal scrolling on sidebar
-    setTimeout(() => enableScrollX(sidebarScrollRef), 50)
+    // Post-mount patch: enable horizontal scrolling on sidebar (skip in single-file mode)
+    if (!singleFileMode) {
+      setTimeout(() => enableScrollX(sidebarScrollRef), 50)
+    }
   })
 
   // -- Keyboard shortcuts --
 
   useKeyboard((key) => {
-    // Tab = switch focus between tree and editor
-    if (key.name === "tab") {
+    // Tab = switch focus between tree and editor (disabled in single-file mode)
+    if (key.name === "tab" && !singleFileMode) {
       setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
     }
 
@@ -278,6 +318,52 @@ const App = () => {
 
   // -- Render --
 
+  // Single-file mode: no sidebar, no tabs — just title bar + editor + status bar
+  if (singleFileMode) {
+    return (
+      <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
+        {/* Title bar: file path + terminal dimensions */}
+        <box width="100%" height={1} backgroundColor="#323233">
+          <text fg="#cccccc" bg="#323233" attributes={1}>
+            {` ${basename(SINGLE_FILE!)} - ${SINGLE_FILE!} `}
+          </text>
+          <box flexGrow={1} backgroundColor="#323233" />
+          <text fg="#666666" bg="#323233">
+            {` ${dimensions().width}x${dimensions().height} `}
+          </text>
+        </box>
+
+        {/* Editor at full width */}
+        <box flexDirection="column" flexGrow={1} width="100%" height="100%">
+          <CodeViewer
+            filePath={openFile()}
+            content={fileContent()}
+            focused={true}
+            availableWidth={dimensions().width}
+            availableHeight={dimensions().height - 2}
+            codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
+            onContentChange={handleContentChange}
+            onCursorChange={(ln, col) => {
+              setCursorLine(ln)
+              setCursorCol(col)
+            }}
+          />
+        </box>
+
+        {/* Status bar */}
+        <StatusBar
+          filePath={openFile()}
+          panel={"editor"}
+          lineCount={lineCount()}
+          cursorLine={cursorLine()}
+          cursorCol={cursorCol()}
+          isDirty={isCurrentFileDirty()}
+        />
+      </box>
+    )
+  }
+
+  // Full IDE mode: sidebar + tabs + editor
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
       {/* Title bar: project path + terminal dimensions */}
@@ -369,7 +455,10 @@ const App = () => {
             availableHeight={dimensions().height - 3}
             codeStartX={clampedSidebarWidth() + 1 + gutterWidth(splitLines(fileContent()).length) + 1}
             onContentChange={handleContentChange}
-            onCursorChange={(ln, col) => { setCursorLine(ln); setCursorCol(col) }}
+            onCursorChange={(ln, col) => {
+              setCursorLine(ln)
+              setCursorCol(col)
+            }}
           />
         </box>
       </box>
