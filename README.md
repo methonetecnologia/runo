@@ -10,6 +10,16 @@ Modern visual IDEs are powerful but heavy. They consume significant memory and C
 
 Runo bridges that gap: **a VS Code-like experience that runs in your terminal.**
 
+### Full IDE Mode
+
+![Runo - Full IDE with file explorer](assets/folder.png)
+
+### Single-File Mode
+
+![Runo - Single file mode](assets/single-file.png)
+
+## Features
+
 - File explorer with tree navigation
 - Syntax highlighting powered by [Shiki](https://shiki.style/) (VS Code TextMate grammars)
 - Tab system with preview and pinned tabs
