@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
-    "types": ["@opentui/solid/jsx-runtime"],
+    "types": ["bun-types", "@opentui/solid/jsx-runtime"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

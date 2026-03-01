@@ -1,18 +1,38 @@
+/**
+ * Main application entry point.
+ *
+ * Renders the full IDE layout: title bar, sidebar (file tree), resize handle,
+ * editor area (tab bar + code viewer), and status bar.
+ *
+ * Layout (top to bottom):
+ *   ┌──────────────────────────────────┐
+ *   │ Title Bar (1 row)                │
+ *   ├────────┬─┬───────────────────────┤
+ *   │Sidebar │▏│ Tab Bar (1 row)       │
+ *   │(tree)  │▏│ Code Viewer (rest)    │
+ *   ├────────┴─┴───────────────────────┤
+ *   │ Status Bar (1 row)               │
+ *   └──────────────────────────────────┘
+ */
+
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, createMemo, onMount } from "solid-js"
 import { basename } from "path"
-import { scanDirectory, readFileContent, FileEntry } from "./lib/files"
+import { scanDirectory, readFileContent, toggleDirectory, type FileEntry } from "./lib/files"
 import FileTree from "./components/FileTree"
 import CodeViewer from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
 import { enableScrollX } from "./lib/scrollbox"
 
+/** Working directory used as project root */
 const CWD = process.cwd()
 
+/** Sidebar width constraints (in terminal columns) */
 const MIN_SIDEBAR = 15
 const MAX_SIDEBAR = 60
 
+/** Represents an open file tab */
 interface Tab {
   path: string
   name: string
@@ -22,22 +42,41 @@ const App = () => {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
 
-  // State
+  // -- State --
+
+  /** File tree entries (recursive structure from scanDirectory) */
   const [files, setFiles] = createSignal(scanDirectory(CWD))
+
+  /** Which panel has keyboard focus */
   const [activePanel, setActivePanel] = createSignal<"tree" | "editor">("tree")
+
+  /** Currently displayed file path (null = no file open) */
   const [openFile, setOpenFile] = createSignal<string | null>(null)
+
+  /** Raw text content of the open file */
   const [fileContent, setFileContent] = createSignal("")
+
+  /** Open tabs (one per opened file) */
   const [tabs, setTabs] = createSignal<Tab[]>([])
+
+  /** Current sidebar width in columns (user-resizable via drag handle) */
   const [sidebarWidth, setSidebarWidth] = createSignal(30)
+
+  /** Whether the user is actively dragging the resize handle */
   const [isDragging, setIsDragging] = createSignal(false)
+
+  /** Whether the mouse is hovering over the resize handle */
   const [dragHover, setDragHover] = createSignal(false)
 
+  // -- Derived --
+
+  /** Total line count for the open file (used by status bar) */
   const lineCount = createMemo(() => {
     if (!openFile()) return 0
     return fileContent().split("\n").length
   })
 
-  // Clamp sidebar width to terminal bounds
+  /** Sidebar width clamped to terminal bounds (prevents overflow) */
   const clampedSidebarWidth = createMemo(() => {
     const w = sidebarWidth()
     const termW = dimensions().width
@@ -47,52 +86,56 @@ const App = () => {
     return w
   })
 
-  // Toggle directory expand/collapse
-  const toggleDir = (target: FileEntry) => {
-    const toggle = (entries: FileEntry[]): FileEntry[] => {
-      const result: FileEntry[] = []
-      for (const entry of entries) {
-        if (entry.path === target.path) {
-          result.push({ ...entry, expanded: !entry.expanded })
-        } else if (entry.children) {
-          result.push({ ...entry, children: toggle(entry.children) })
-        } else {
-          result.push(entry)
-        }
-      }
-      return result
-    }
-    setFiles(toggle(files()))
+  // -- Handlers --
+
+  /**
+   * Toggles a directory's expanded/collapsed state.
+   * Uses the pure toggleDirectory() from lib/files.ts for immutable updates.
+   */
+  const handleToggleDir = (target: FileEntry) => {
+    setFiles(toggleDirectory(files(), target.path))
   }
 
-  // Open a file
-  const openFileHandler = (entry: FileEntry) => {
+  /**
+   * Opens a file: reads content, switches focus to editor, adds tab if new.
+   */
+  const handleOpenFile = (entry: FileEntry) => {
     const content = readFileContent(entry.path)
     setOpenFile(entry.path)
     setFileContent(content)
     setActivePanel("editor")
 
-    const existing = tabs().find((t) => t.path === entry.path)
-    if (!existing) {
+    // Add tab only if not already open
+    const alreadyOpen = tabs().find((t) => t.path === entry.path)
+    if (!alreadyOpen) {
       setTabs([...tabs(), { path: entry.path, name: basename(entry.path) }])
     }
   }
 
+  // -- Scrollbox setup --
+
+  /** Ref to the sidebar scrollbox (assigned post-mount via ref={} prop) */
   let sidebarScrollRef: any
 
   onMount(() => {
+    // Post-mount patch: enable horizontal scrolling on sidebar
     setTimeout(() => enableScrollX(sidebarScrollRef), 50)
   })
 
-  // Keyboard
+  // -- Keyboard shortcuts --
+
   useKeyboard((key) => {
+    // Tab = switch focus between tree and editor
     if (key.name === "tab") {
       setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
     }
+
+    // Ctrl+C = exit
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
     }
-    // Shift+arrow = horizontal scroll on sidebar
+
+    // Shift+Arrow = horizontal/vertical scroll on sidebar when focused
     if (activePanel() === "tree" && sidebarScrollRef && key.shift) {
       if (key.name === "left" || key.name === "right") {
         const delta = key.name === "right" ? 3 : -3
@@ -105,21 +148,19 @@ const App = () => {
     }
   })
 
-  // Drag border color
+  // -- Drag handle color (visual feedback for resize border) --
+
   const borderHandleColor = () => {
     if (isDragging()) return "#007acc"
     if (dragHover()) return "#4d9fd6"
     return "#3c3c3c"
   }
 
+  // -- Render --
+
   return (
-    <box
-      flexDirection="column"
-      width="100%"
-      height="100%"
-      backgroundColor="#1e1e1e"
-    >
-      {/* Title bar */}
+    <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
+      {/* Title bar: project path + terminal dimensions */}
       <box width="100%" height={1} backgroundColor="#323233">
         <text fg="#cccccc" bg="#323233" attributes={1}>
           {` Mini IDE - ${CWD} `}
@@ -130,9 +171,9 @@ const App = () => {
         </text>
       </box>
 
-      {/* Main area */}
+      {/* Main area: sidebar + resize handle + editor */}
       <box flexDirection="row" flexGrow={1} width="100%">
-        {/* Sidebar */}
+        {/* Sidebar: explorer header + scrollable file tree */}
         <box
           flexDirection="column"
           width={clampedSidebarWidth()}
@@ -152,19 +193,18 @@ const App = () => {
             focused={activePanel() === "tree"}
             scrollX={true}
             scrollY={true}
-            
           >
             <FileTree
               files={files()}
               focused={activePanel() === "tree"}
-              onSelect={openFileHandler}
-              onToggle={toggleDir}
+              onSelect={handleOpenFile}
+              onToggle={handleToggleDir}
               onFocus={() => setActivePanel("tree")}
             />
           </scrollbox>
         </box>
 
-        {/* Drag handle (resize border) */}
+        {/* Resize handle: 1-column draggable border between sidebar and editor */}
         <box
           width={1}
           height="100%"
@@ -191,28 +231,26 @@ const App = () => {
           }}
         />
 
-        {/* Editor area */}
-        <box
-          flexDirection="column"
-          flexGrow={1}
-          height="100%"
-          onMouseDown={() => setActivePanel("editor")}
-        >
+        {/* Editor area: tab bar + code viewer */}
+        <box flexDirection="column" flexGrow={1} height="100%" onMouseDown={() => setActivePanel("editor")}>
           <TabBar tabs={tabs()} activeTab={openFile()} />
-          <CodeViewer filePath={openFile()} content={fileContent()} focused={activePanel() === "editor"} availableWidth={dimensions().width - clampedSidebarWidth() - 1} availableHeight={dimensions().height - 3} />
+          <CodeViewer
+            filePath={openFile()}
+            content={fileContent()}
+            focused={activePanel() === "editor"}
+            availableWidth={dimensions().width - clampedSidebarWidth() - 1}
+            availableHeight={dimensions().height - 3}
+          />
         </box>
       </box>
 
       {/* Status bar */}
-      <StatusBar
-        filePath={openFile()}
-        panel={activePanel()}
-        lineCount={lineCount()}
-      />
+      <StatusBar filePath={openFile()} panel={activePanel()} lineCount={lineCount()} />
     </box>
   )
 }
 
+/** Render with OpenTUI runtime options */
 render(App, {
   targetFps: 30,
   exitOnCtrlC: true,

@@ -1,3 +1,5 @@
+/** Bottom status bar showing active panel, file info, and shortcuts. */
+
 import { basename } from "path"
 
 interface StatusBarProps {
@@ -7,15 +9,10 @@ interface StatusBarProps {
 }
 
 const StatusBar = (props: StatusBarProps) => {
-  const fileName = () => props.filePath ? basename(props.filePath) : "Sem arquivo"
+  const fileName = () => (props.filePath ? basename(props.filePath) : "No file")
 
   return (
-    <box
-      flexDirection="row"
-      width="100%"
-      height={1}
-      backgroundColor="#007acc"
-    >
+    <box flexDirection="row" width="100%" height={1} backgroundColor="#007acc">
       <text fg="#ffffff" bg="#007acc">
         {` ${props.panel === "tree" ? "EXPLORER" : "EDITOR"} `}
       </text>
@@ -24,7 +21,7 @@ const StatusBar = (props: StatusBarProps) => {
       </text>
       <box flexGrow={1} backgroundColor="#007acc" />
       <text fg="#ffffff" bg="#007acc">
-        {props.filePath ? ` Linhas: ${props.lineCount} ` : ""}
+        {props.filePath ? ` Lines: ${props.lineCount} ` : ""}
       </text>
       <text fg="#ffffff" bg="#005a9e">
         {" Shift+Arrows: scroll H "}

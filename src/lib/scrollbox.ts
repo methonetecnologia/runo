@@ -1,74 +1,108 @@
 /**
- * Habilita scroll horizontal num scrollbox do OpenTUI.
+ * ScrollBox layout workarounds for OpenTUI.
  *
- * O binding Solid cria o ScrollBoxRenderable com { id } apenas,
- * sem passar scrollX/scrollY/scrollbarOptions ao constructor.
- * O content fica com maxWidth:"100%" impedindo overflow horizontal.
+ * The OpenTUI Solid binding creates ScrollBoxRenderable with only { id },
+ * without forwarding scrollX/scrollY/scrollbarOptions to the constructor.
+ * This causes the internal content element to have maxWidth:"100%", preventing
+ * horizontal overflow. Additionally, when content is larger than the viewport,
+ * the flexbox layout pushes scrollbars outside the visible area.
  *
- * Este helper corrige isso post-mount.
+ * These helpers patch the scrollbox internals post-mount to fix these issues.
+ *
+ * Internal ScrollBox structure (for reference):
+ *   root (flexDirection: "row")
+ *   ├── wrapper (flexDirection: "column", flexGrow: 1)
+ *   │   ├── viewport (overflow: "hidden", flexGrow: 1)
+ *   │   │   └── content (flexShrink: 0, minWidth/maxWidth depending on scrollX)
+ *   │   └── horizontalScrollBar
+ *   └── verticalScrollBar
+ */
+
+/** Scrollbar visual dimensions (in terminal cells) */
+const VERTICAL_BAR_WIDTH = 2
+const HORIZONTAL_BAR_HEIGHT = 1
+
+/** Scrollbar colors */
+const SCROLLBAR_FG = "#5a5a5a"
+const SCROLLBAR_BG = "#2b2b2b"
+
+/**
+ * Enables horizontal scrolling on a scrollbox by removing the maxWidth
+ * constraint that prevents content from overflowing horizontally.
+ *
+ * Must be called after the component mounts (post-mount), since the
+ * scrollbox internals are only available after the first render.
+ *
+ * @param scrollRef - Reference to the scrollbox element
  */
 export function enableScrollX(scrollRef: any) {
   if (!scrollRef?.content) return
+
+  // Remove the maxWidth:"100%" that prevents horizontal overflow
   scrollRef.content.maxWidth = undefined
+  // Ensure content is at least as wide as the viewport
   scrollRef.content.minWidth = "100%"
-  // Aplica estilo consistente nas scrollbars
+
+  // Apply consistent scrollbar styling
   styleScrollbars(scrollRef)
 }
 
 /**
- * Corrige o layout do ScrollBox para que ambas as scrollbars fiquem visíveis.
+ * Constrains the scrollbox internal layout so both scrollbars remain visible.
  *
- * O problema: o ScrollBox usa flexbox internamente, e quando o conteúdo
- * é maior que o viewport, o wrapper/viewport crescem com o conteúdo,
- * empurrando as scrollbars para fora da área visível.
+ * Without this fix, when content is larger than the viewport, the flexbox
+ * layout causes:
+ * - The wrapper to expand horizontally, pushing the vertical scrollbar off-screen
+ * - The viewport to expand vertically, pushing the horizontal scrollbar off-screen
  *
- * A solução: setar maxWidth/maxHeight explícitos nos elementos internos,
- * baseados no espaço real disponível, para conter o layout.
+ * The fix applies explicit maxWidth on the wrapper and maxHeight on the viewport,
+ * accounting for the space reserved for scrollbars.
  *
- * Estrutura interna do ScrollBox:
- *   root (row, width=W, height=H)
- *   ├── wrapper (col, flexGrow:1) → precisa maxWidth = W - vBarWidth
- *   │   ├── viewport (col, flexGrow:1, overflow:hidden) → precisa maxHeight = H - hBarHeight
- *   │   └── horizontalScrollBar (height: 1)
- *   └── verticalScrollBar (width: 1~2)
+ * @param scrollRef - Reference to the scrollbox element
+ * @param width - Available width for the entire scrollbox (including scrollbars)
+ * @param height - Available height for the entire scrollbox (including scrollbars)
  */
 export function constrainScrollbox(scrollRef: any, width: number, height: number) {
   if (!scrollRef) return
 
-  const vBarW = 2
-  const hBarH = 1
-
-  // Root: tamanho fixo
+  // Set explicit dimensions on the scrollbox root
   scrollRef.width = width
   scrollRef.height = height
 
-  // Wrapper: não pode ser mais largo que root - vBar
+  // Constrain wrapper width so the vertical scrollbar stays visible
   if (scrollRef.wrapper) {
-    scrollRef.wrapper.maxWidth = Math.max(1, width - vBarW)
+    scrollRef.wrapper.maxWidth = Math.max(1, width - VERTICAL_BAR_WIDTH)
   }
 
-  // Viewport: não pode ser mais alto que root - hBar
+  // Constrain viewport height so the horizontal scrollbar stays visible
   if (scrollRef.viewport) {
-    scrollRef.viewport.maxHeight = Math.max(1, height - hBarH)
+    scrollRef.viewport.maxHeight = Math.max(1, height - HORIZONTAL_BAR_HEIGHT)
   }
 }
 
-/** Aplica cores e harmoniza tamanhos nas scrollbars */
+/**
+ * Applies consistent colors and sizes to both scrollbars.
+ *
+ * Sets the vertical scrollbar to VERTICAL_BAR_WIDTH chars wide and the
+ * horizontal scrollbar to HORIZONTAL_BAR_HEIGHT lines tall.
+ * Both use the same foreground/background colors for a unified look.
+ *
+ * @param scrollRef - Reference to the scrollbox element
+ */
 export function styleScrollbars(scrollRef: any) {
   if (!scrollRef) return
-  const fg = "#5a5a5a"
-  const bg = "#2b2b2b"
 
   if (scrollRef.verticalScrollBar) {
-    scrollRef.verticalScrollBar.slider.foregroundColor = fg
-    scrollRef.verticalScrollBar.slider.backgroundColor = bg
-    scrollRef.verticalScrollBar.slider.width = 2
-    scrollRef.verticalScrollBar.width = 2
+    scrollRef.verticalScrollBar.slider.foregroundColor = SCROLLBAR_FG
+    scrollRef.verticalScrollBar.slider.backgroundColor = SCROLLBAR_BG
+    scrollRef.verticalScrollBar.slider.width = VERTICAL_BAR_WIDTH
+    scrollRef.verticalScrollBar.width = VERTICAL_BAR_WIDTH
   }
+
   if (scrollRef.horizontalScrollBar) {
-    scrollRef.horizontalScrollBar.slider.foregroundColor = fg
-    scrollRef.horizontalScrollBar.slider.backgroundColor = bg
-    scrollRef.horizontalScrollBar.slider.height = 1
-    scrollRef.horizontalScrollBar.height = 1
+    scrollRef.horizontalScrollBar.slider.foregroundColor = SCROLLBAR_FG
+    scrollRef.horizontalScrollBar.slider.backgroundColor = SCROLLBAR_BG
+    scrollRef.horizontalScrollBar.slider.height = HORIZONTAL_BAR_HEIGHT
+    scrollRef.horizontalScrollBar.height = HORIZONTAL_BAR_HEIGHT
   }
 }

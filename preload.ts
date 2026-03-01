@@ -27,10 +27,7 @@ const solidPlugin: BunPlugin = {
       const code = await file.text()
       const result = await transformAsync(code, {
         filename: args.path,
-        presets: [
-          [solid, { moduleName: "@opentui/solid", generate: "universal" }],
-          [ts],
-        ],
+        presets: [[solid, { moduleName: "@opentui/solid", generate: "universal" }], [ts]],
       })
       return { contents: result?.code ?? "", loader: "js" }
     })
