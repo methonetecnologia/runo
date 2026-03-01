@@ -1,8 +1,9 @@
 /**
  * Build script for Runo.
  *
- * Compiles the project into a standalone binary using Bun.build + --compile.
- * The SolidJS Babel transform plugin is applied at build time (same as preload.ts).
+ * Two-step process:
+ *   1. Bun.build() bundles the app with SolidJS plugin (target: "bun", outdir: dist/)
+ *   2. bun build --compile converts the bundle into a standalone binary
  *
  * Usage:
  *   bun run build.ts                           # build for current platform
@@ -15,6 +16,7 @@ import ts from "@babel/preset-typescript"
 // @ts-expect-error
 import solid from "babel-preset-solid"
 import type { BunPlugin } from "bun"
+import { rmSync } from "fs"
 
 const solidPlugin: BunPlugin = {
   name: "solid-transform",
@@ -56,31 +58,30 @@ console.log(`Building Runo...`)
 if (target) console.log(`  Target: ${target}`)
 console.log(`  Output: ${outfile}`)
 
-const buildConfig: Parameters<typeof Bun.build>[0] = {
+// Step 1: Bundle with SolidJS plugin (always target "bun" here)
+const result = await Bun.build({
   entrypoints: ["./src/index.tsx"],
-  outdir: ".",
+  outdir: "./dist",
   plugins: [solidPlugin],
   conditions: ["browser"],
-  target: (target as any) ?? "bun",
+  target: "bun",
   minify: true,
   define: {
     "process.env.RUNO_VERSION": JSON.stringify(require("./package.json").version),
   },
-}
-
-const result = await Bun.build(buildConfig)
+})
 
 if (!result.success) {
-  console.error("Build failed:")
+  console.error("Bundle failed:")
   for (const log of result.logs) {
     console.error(log)
   }
   process.exit(1)
 }
 
-console.log("Build succeeded!")
+console.log("Bundle succeeded!")
 
-// Now compile the bundled output into a standalone binary
+// Step 2: Compile the bundle into a standalone binary
 const bundledFile = result.outputs[0].path
 const compileArgs = ["bun", "build", "--compile", bundledFile, "--outfile", outfile]
 if (target) compileArgs.push(`--target=${target}`)
@@ -88,10 +89,9 @@ if (target) compileArgs.push(`--target=${target}`)
 const proc = Bun.spawn(compileArgs, { stdout: "inherit", stderr: "inherit" })
 const exitCode = await proc.exited
 
-// Clean up intermediate bundle
+// Clean up dist/
 try {
-  const { unlinkSync } = await import("fs")
-  unlinkSync(bundledFile)
+  rmSync("./dist", { recursive: true, force: true })
 } catch {}
 
 if (exitCode !== 0) {
