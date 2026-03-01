@@ -369,7 +369,7 @@ const App = () => {
       {/* Title bar: project path + terminal dimensions */}
       <box width="100%" height={1} backgroundColor="#323233">
         <text fg="#cccccc" bg="#323233" attributes={1}>
-          {` Mini IDE - ${CWD} `}
+          {` Runo - ${CWD} `}
         </text>
         <box flexGrow={1} backgroundColor="#323233" />
         <text fg="#666666" bg="#323233">
