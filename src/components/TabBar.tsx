@@ -1,22 +1,21 @@
 /**
- * Tab bar component showing open file tabs.
+ * Tab bar component with VSCode-style preview/pinned tab behavior.
  *
- * Displays a horizontal row of tabs, one per open file. The active tab
- * is highlighted with a brighter foreground and matching editor background.
- * When no tabs are open, a placeholder message is shown.
- *
- * NOTE: Uses <Show> instead of early return to preserve Solid.js reactivity.
- * Early returns in Solid components prevent reactive updates from firing
- * because the component body only runs once — conditional rendering must
- * use <Show>/<Switch> or ternaries so the reactive graph stays intact.
+ * - Preview tabs show the filename in italic (dimmer color) and are replaced
+ *   when another file is single-clicked.
+ * - Pinned tabs show the filename normally and stay open until explicitly closed.
+ * - Each tab has a close button (x) on hover or when active.
+ * - Clicking a tab switches to it.
+ * - Double-clicking a preview tab pins it.
  */
 
-import { Show, For } from "solid-js"
+import { createSignal, Show, For } from "solid-js"
 
 /** Single tab data */
 interface Tab {
   path: string
   name: string
+  mode: "preview" | "pinned"
 }
 
 interface TabBarProps {
@@ -24,9 +23,18 @@ interface TabBarProps {
   tabs: Tab[]
   /** Path of the currently active/visible tab (null if none) */
   activeTab: string | null
+  /** Called when a tab is clicked (switch to it) */
+  onSelect: (path: string) => void
+  /** Called when a tab's close button is clicked */
+  onClose: (path: string) => void
+  /** Called when a preview tab should be pinned (double-click) */
+  onPin: (path: string) => void
 }
 
 const TabBar = (props: TabBarProps) => {
+  /** Track which tab the mouse is hovering over */
+  const [hoveredTab, setHoveredTab] = createSignal<string | null>(null)
+
   return (
     <Show
       when={props.tabs.length > 0}
@@ -42,10 +50,58 @@ const TabBar = (props: TabBarProps) => {
         <For each={props.tabs}>
           {(tab) => {
             const isActive = () => tab.path === props.activeTab
+            const isHovered = () => tab.path === hoveredTab()
+            const isPreview = () => tab.mode === "preview"
+
+            // Tab background: active = editor bg, inactive = darker
+            const bg = () => (isActive() ? "#1e1e1e" : "#2d2d2d")
+
+            // Tab text color: preview uses italic-like dimmer color
+            const fg = () => {
+              if (isActive()) return isPreview() ? "#bbbbbb" : "#ffffff"
+              return isPreview() ? "#777777" : "#969696"
+            }
+
+            // Close button: show on hover or when active
+            const showClose = () => isActive() || isHovered()
+
+            // Preview tabs show name in italic style (surrounded by dashes to hint)
+            const displayName = () => (isPreview() ? `${tab.name}` : tab.name)
+
             return (
-              <text fg={isActive() ? "#ffffff" : "#969696"} bg={isActive() ? "#1e1e1e" : "#2d2d2d"}>
-                {` ${tab.name} `}
-              </text>
+              <box
+                flexDirection="row"
+                height={1}
+                backgroundColor={bg()}
+                onMouseOver={() => setHoveredTab(tab.path)}
+                onMouseOut={() => {
+                  if (hoveredTab() === tab.path) setHoveredTab(null)
+                }}
+                onMouseDown={() => props.onSelect(tab.path)}
+                onDblClick={() => {
+                  if (isPreview()) props.onPin(tab.path)
+                }}
+              >
+                {/* Tab name */}
+                <text
+                  fg={fg()}
+                  bg={bg()}
+                  attributes={isPreview() ? 3 : 0}
+                >
+                  {` ${displayName()} `}
+                </text>
+                {/* Close button or spacer */}
+                <text
+                  fg={showClose() ? "#969696" : bg()}
+                  bg={bg()}
+                  onMouseDown={(e: any) => {
+                    e?.stopPropagation?.()
+                    props.onClose(tab.path)
+                  }}
+                >
+                  {showClose() ? "x " : "  "}
+                </text>
+              </box>
             )
           }}
         </For>

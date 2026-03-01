@@ -36,6 +36,9 @@ const MAX_SIDEBAR = 60
 interface Tab {
   path: string
   name: string
+  /** preview = temporary tab (italic, replaced on next file click) */
+  /** pinned = persistent tab (normal text, stays open) */
+  mode: "preview" | "pinned"
 }
 
 const App = () => {
@@ -97,7 +100,10 @@ const App = () => {
   }
 
   /**
-   * Opens a file: reads content, switches focus to editor, adds tab if new.
+   * Opens a file with VSCode-style preview tab logic:
+   * - Single click opens as "preview" (italic tab, replaced by next preview)
+   * - Double click or editing pins the tab (stays open)
+   * - If the file is already open (pinned or preview), just switch to it
    */
   const handleOpenFile = (entry: FileEntry) => {
     const content = readFileContent(entry.path)
@@ -105,11 +111,73 @@ const App = () => {
     setFileContent(content)
     setActivePanel("editor")
 
-    // Add tab only if not already open
-    const alreadyOpen = tabs().find((t) => t.path === entry.path)
-    if (!alreadyOpen) {
-      setTabs([...tabs(), { path: entry.path, name: basename(entry.path) }])
+    const currentTabs = tabs()
+    const existing = currentTabs.find((t) => t.path === entry.path)
+
+    if (existing) {
+      // Already open — just switch to it (don't change mode)
+      return
     }
+
+    // Replace existing preview tab with new preview, or add new preview
+    const previewIndex = currentTabs.findIndex((t) => t.mode === "preview")
+    if (previewIndex !== -1) {
+      // Replace the old preview tab
+      const updated = [...currentTabs]
+      updated[previewIndex] = { path: entry.path, name: basename(entry.path), mode: "preview" }
+      setTabs(updated)
+    } else {
+      // No preview tab exists — add a new one
+      setTabs([...currentTabs, { path: entry.path, name: basename(entry.path), mode: "preview" }])
+    }
+  }
+
+  /**
+   * Pins the currently active tab (e.g. when user edits content or double-clicks).
+   * A pinned tab won't be replaced by the next file click.
+   */
+  const pinTab = (path: string) => {
+    setTabs(
+      tabs().map((t) => (t.path === path ? { ...t, mode: "pinned" as const } : t))
+    )
+  }
+
+  /**
+   * Closes a tab by path. If closing the active tab, switch to the nearest neighbor.
+   */
+  const closeTab = (path: string) => {
+    const currentTabs = tabs()
+    const index = currentTabs.findIndex((t) => t.path === path)
+    if (index === -1) return
+
+    const newTabs = currentTabs.filter((t) => t.path !== path)
+    setTabs(newTabs)
+
+    // If we closed the active tab, switch to a neighbor or clear
+    if (openFile() === path) {
+      if (newTabs.length === 0) {
+        setOpenFile(null)
+        setFileContent("")
+      } else {
+        // Prefer the tab at the same index, or the last one
+        const nextIndex = Math.min(index, newTabs.length - 1)
+        const nextTab = newTabs[nextIndex]
+        const content = readFileContent(nextTab.path)
+        setOpenFile(nextTab.path)
+        setFileContent(content)
+      }
+    }
+  }
+
+  /**
+   * Switches to a tab by path (clicking on a tab in the tab bar).
+   */
+  const switchTab = (path: string) => {
+    if (openFile() === path) return
+    const content = readFileContent(path)
+    setOpenFile(path)
+    setFileContent(content)
+    setActivePanel("editor")
   }
 
   // -- Scrollbox setup --
@@ -133,6 +201,12 @@ const App = () => {
     // Ctrl+C = exit
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
+    }
+
+    // Ctrl+W = close active tab
+    if (key.ctrl && key.name === "w") {
+      const active = openFile()
+      if (active) closeTab(active)
     }
 
     // Shift+Arrow = horizontal/vertical scroll on sidebar when focused
@@ -233,7 +307,13 @@ const App = () => {
 
         {/* Editor area: tab bar + code viewer */}
         <box flexDirection="column" flexGrow={1} height="100%" onMouseDown={() => setActivePanel("editor")}>
-          <TabBar tabs={tabs()} activeTab={openFile()} />
+          <TabBar
+            tabs={tabs()}
+            activeTab={openFile()}
+            onSelect={switchTab}
+            onClose={closeTab}
+            onPin={pinTab}
+          />
           <CodeViewer
             filePath={openFile()}
             content={fileContent()}
