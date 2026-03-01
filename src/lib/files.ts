@@ -3,7 +3,7 @@
  * Pure functions — no UI dependencies, easily testable.
  */
 
-import { readdirSync, readFileSync, statSync } from "fs"
+import { readdirSync, readFileSync, writeFileSync, statSync } from "fs"
 import { join, basename } from "path"
 
 export interface FileEntry {
@@ -91,6 +91,16 @@ export function readFileContent(filePath: string): string {
     return readFileSync(filePath, "utf-8")
   } catch {
     return "[Error reading file]"
+  }
+}
+
+/** Writes file content as UTF-8. Returns true on success, false on failure. */
+export function writeFileContent(filePath: string, content: string): boolean {
+  try {
+    writeFileSync(filePath, content, "utf-8")
+    return true
+  } catch {
+    return false
   }
 }
 

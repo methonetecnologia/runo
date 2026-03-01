@@ -18,7 +18,7 @@
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, createMemo, onMount } from "solid-js"
 import { basename } from "path"
-import { scanDirectory, readFileContent, toggleDirectory, type FileEntry } from "./lib/files"
+import { scanDirectory, readFileContent, writeFileContent, toggleDirectory, gutterWidth, splitLines, type FileEntry } from "./lib/files"
 import FileTree from "./components/FileTree"
 import CodeViewer from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
@@ -70,6 +70,13 @@ const App = () => {
 
   /** Whether the mouse is hovering over the resize handle */
   const [dragHover, setDragHover] = createSignal(false)
+
+  /** Set of file paths with unsaved changes */
+  const [dirtyFiles, setDirtyFiles] = createSignal<Set<string>>(new Set())
+
+  /** Current cursor position (1-based) */
+  const [cursorLine, setCursorLine] = createSignal(1)
+  const [cursorCol, setCursorCol] = createSignal(1)
 
   // -- Derived --
 
@@ -180,6 +187,36 @@ const App = () => {
     setActivePanel("editor")
   }
 
+  const handleContentChange = (newContent: string) => {
+    setFileContent(newContent)
+    const path = openFile()
+    if (path) {
+      const updated = new Set(dirtyFiles())
+      updated.add(path)
+      setDirtyFiles(updated)
+      // Auto-pin the tab when editing
+      pinTab(path)
+    }
+  }
+
+  const saveFile = () => {
+    const path = openFile()
+    if (!path) return
+    const success = writeFileContent(path, fileContent())
+    if (success) {
+      const updated = new Set(dirtyFiles())
+      updated.delete(path)
+      setDirtyFiles(updated)
+    }
+  }
+
+  /** Whether the current file has unsaved changes */
+  const isCurrentFileDirty = () => {
+    const path = openFile()
+    if (!path) return false
+    return dirtyFiles().has(path)
+  }
+
   // -- Scrollbox setup --
 
   /** Ref to the sidebar scrollbox (assigned post-mount via ref={} prop) */
@@ -201,6 +238,11 @@ const App = () => {
     // Ctrl+C = exit
     if (key.ctrl && key.name === "c") {
       renderer.destroy()
+    }
+
+    // Ctrl+S = save current file
+    if (key.ctrl && key.name === "s") {
+      saveFile()
     }
 
     // Ctrl+W = close active tab
@@ -310,6 +352,7 @@ const App = () => {
           <TabBar
             tabs={tabs()}
             activeTab={openFile()}
+            dirtyFiles={dirtyFiles()}
             onSelect={switchTab}
             onClose={closeTab}
             onPin={pinTab}
@@ -320,12 +363,22 @@ const App = () => {
             focused={activePanel() === "editor"}
             availableWidth={dimensions().width - clampedSidebarWidth() - 1}
             availableHeight={dimensions().height - 3}
+            codeStartX={clampedSidebarWidth() + 1 + gutterWidth(splitLines(fileContent()).length) + 1}
+            onContentChange={handleContentChange}
+            onCursorChange={(ln, col) => { setCursorLine(ln); setCursorCol(col) }}
           />
         </box>
       </box>
 
       {/* Status bar */}
-      <StatusBar filePath={openFile()} panel={activePanel()} lineCount={lineCount()} />
+      <StatusBar
+        filePath={openFile()}
+        panel={activePanel()}
+        lineCount={lineCount()}
+        cursorLine={cursorLine()}
+        cursorCol={cursorCol()}
+        isDirty={isCurrentFileDirty()}
+      />
     </box>
   )
 }

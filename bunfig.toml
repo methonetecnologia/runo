@@ -1,2 +1,2 @@
 [run]
-preload = ["./preload.ts"]
+reload = ["./preload.ts"]

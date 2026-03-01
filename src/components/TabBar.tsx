@@ -23,6 +23,8 @@ interface TabBarProps {
   tabs: Tab[]
   /** Path of the currently active/visible tab (null if none) */
   activeTab: string | null
+  /** Set of file paths with unsaved changes */
+  dirtyFiles?: Set<string>
   /** Called when a tab is clicked (switch to it) */
   onSelect: (path: string) => void
   /** Called when a tab's close button is clicked */
@@ -52,6 +54,7 @@ const TabBar = (props: TabBarProps) => {
             const isActive = () => tab.path === props.activeTab
             const isHovered = () => tab.path === hoveredTab()
             const isPreview = () => tab.mode === "preview"
+            const isDirty = () => props.dirtyFiles?.has(tab.path) ?? false
 
             // Tab background: active = editor bg, inactive = darker
             const bg = () => (isActive() ? "#1e1e1e" : "#2d2d2d")
@@ -65,8 +68,11 @@ const TabBar = (props: TabBarProps) => {
             // Close button: show on hover or when active
             const showClose = () => isActive() || isHovered()
 
-            // Preview tabs show name in italic style (surrounded by dashes to hint)
-            const displayName = () => (isPreview() ? `${tab.name}` : tab.name)
+            // Preview tabs show name in italic style; dirty files get a dot indicator
+            const displayName = () => {
+              const name = isPreview() ? `${tab.name}` : tab.name
+              return isDirty() ? `${name} *` : name
+            }
 
             return (
               <box
