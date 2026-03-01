@@ -17,8 +17,7 @@
 
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, createMemo, onMount } from "solid-js"
-import { basename, resolve } from "path"
-import { existsSync } from "fs"
+import { basename } from "path"
 import {
   scanDirectory,
   readFileContent,
@@ -34,6 +33,10 @@ import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
 import { enableScrollX } from "./lib/scrollbox"
 import { preloadHighlighter } from "./lib/highlighter"
+import { parseCli } from "./cli"
+
+/** Handle CLI subcommands (upgrade, --version, --help) before TUI boot */
+const cliOptions = await parseCli()
 
 /** Start loading Shiki highlighter eagerly at boot */
 preloadHighlighter()
@@ -41,31 +44,8 @@ preloadHighlighter()
 /** Working directory used as project root */
 const CWD = process.cwd()
 
-// -- CLI argument parsing: --file / -f <path> --
-
-/** Parse --file or -f argument from process.argv */
-function parseSingleFileArg(): string | null {
-  const args = process.argv.slice(2)
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--file" || args[i] === "-f") {
-      const filePath = args[i + 1]
-      if (!filePath) {
-        console.error("Error: --file / -f requires a file path argument")
-        process.exit(1)
-      }
-      const resolved = resolve(CWD, filePath)
-      if (!existsSync(resolved)) {
-        console.error(`Error: file not found: ${resolved}`)
-        process.exit(1)
-      }
-      return resolved
-    }
-  }
-  return null
-}
-
 /** If set, IDE opens in single-file mode (no sidebar, no tabs) */
-const SINGLE_FILE = parseSingleFileArg()
+const SINGLE_FILE = cliOptions.singleFile
 
 /** Sidebar width constraints (in terminal columns) */
 const MIN_SIDEBAR = 15

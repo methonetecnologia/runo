@@ -59,19 +59,40 @@ src/
     scrollbox.ts          # OpenTUI scrollbox patches
 ```
 
-## Getting Started
+## Installation
 
-### Prerequisites
-
-- [Bun](https://bun.sh/) v1.0+
-
-### Install & Run
+### Quick Install (Linux / macOS)
 
 ```bash
-git clone https://github.com/methonetecnologia/runo.git
-cd runo
-bun install
-bun run dev
+curl -fsSL https://raw.githubusercontent.com/methonetecnologia/runo/master/install.sh | sh
+```
+
+This downloads the latest binary for your platform and installs it to `/usr/local/bin/runo`.
+
+### Manual Download
+
+Download the binary for your platform from the [Releases page](https://github.com/methonetecnologia/runo/releases), make it executable, and place it in your PATH:
+
+```bash
+chmod +x runo-linux-x64
+sudo mv runo-linux-x64 /usr/local/bin/runo
+```
+
+### Update
+
+```bash
+runo upgrade
+```
+
+## Usage
+
+```bash
+runo                     # Open IDE in current directory
+runo --file <path>       # Open a single file (no sidebar)
+runo -f <path>           # Same as --file
+runo upgrade             # Update to the latest version
+runo --version           # Show version
+runo --help              # Show help
 ```
 
 ### Single-File Mode
@@ -79,9 +100,8 @@ bun run dev
 Open a single file without the sidebar, focused entirely on content:
 
 ```bash
-bun run dev -- --file ./path/to/file.ts
-# or
-bun run dev -- -f ./path/to/file.ts
+runo --file ./path/to/file.ts
+runo -f ./path/to/file.ts
 ```
 
 ### Keyboard Shortcuts
@@ -98,8 +118,12 @@ bun run dev -- -f ./path/to/file.ts
 
 ## Development
 
+Requires [Bun](https://bun.sh/) v1.0+.
+
 ```bash
-bun run dev          # Start the IDE
+bun install          # Install dependencies
+bun run dev          # Start the IDE (dev mode)
+bun run build        # Build standalone binary for current platform
 bun test             # Run tests
 bun run lint         # Lint with ESLint
 bun run format       # Format with Prettier

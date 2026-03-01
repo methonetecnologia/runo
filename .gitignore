@@ -3,3 +3,11 @@ dist/
 .idea/
 .vscode/
 *.log
+
+# Build output binaries
+runo
+runo-*
+
+# Shiki/tree-sitter build artifacts
+*.wasm
+*.scm
