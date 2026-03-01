@@ -3,12 +3,17 @@
  *
  * Cursor is rendered as an inverted-color block character that blinks.
  * No native terminal cursor is used.
+ *
+ * Syntax highlighting is provided by Shiki (VS Code TextMate grammars).
+ * Tokens are resolved asynchronously and cached; while loading or for
+ * unknown languages the editor falls back to monochrome #d4d4d4.
  */
 
 import { createMemo, createEffect, createSignal, Show, For, onMount, onCleanup } from "solid-js"
 import { useKeyboard, useRenderer } from "@opentui/solid"
 import { enableScrollX, constrainScrollbox, styleScrollbars } from "../lib/scrollbox"
-import { splitLines, gutterWidth, maxLineLength, expandTabs } from "../lib/files"
+import { splitLines, gutterWidth, maxLineLength, expandTabs, getFileExtension, extToShikiLang } from "../lib/files"
+import { highlightCode, type ColorToken } from "../lib/highlighter"
 
 interface CodeViewerProps {
   filePath: string | null
@@ -22,6 +27,8 @@ interface CodeViewerProps {
   onCursorChange?: (line: number, col: number) => void
 }
 
+const DEFAULT_FG = "#d4d4d4"
+
 const CodeViewer = (props: CodeViewerProps) => {
   const renderer = useRenderer()
 
@@ -32,6 +39,9 @@ const CodeViewer = (props: CodeViewerProps) => {
   const [cursorRow, setCursorRow] = createSignal(0)
   const [cursorCol, setCursorCol] = createSignal(0)
   const [cursorVisible, setCursorVisible] = createSignal(true)
+
+  // -- Syntax highlight tokens --
+  const [highlightTokens, setHighlightTokens] = createSignal<ColorToken[][] | null>(null)
 
   // -- Blink --
   let blinkTimer: ReturnType<typeof setInterval>
@@ -56,6 +66,46 @@ const CodeViewer = (props: CodeViewerProps) => {
   const codeWidth = createMemo(() => Math.max(1, props.availableWidth - gutterW() - 1))
   const maxLineLen = createMemo(() => maxLineLength(lines()))
 
+  // -- Syntax highlighting effect (debounced) --
+  let hlTimer: ReturnType<typeof setTimeout> | null = null
+  /** Track which highlight request is latest to discard stale results. */
+  let hlGeneration = 0
+
+  createEffect(() => {
+    const content = props.content
+    const filePath = props.filePath
+
+    if (hlTimer) clearTimeout(hlTimer)
+
+    if (!filePath) {
+      setHighlightTokens(null)
+      return
+    }
+
+    const ext = getFileExtension(filePath)
+    const lang = extToShikiLang(ext)
+    if (!lang || lang === "plaintext") {
+      setHighlightTokens(null)
+      return
+    }
+
+    const gen = ++hlGeneration
+
+    // Invalidate stale tokens immediately so line colours don't desync
+    // while the async highlighter catches up.
+    setHighlightTokens(null)
+
+    // Debounce: 100ms after last content change to avoid thrashing during fast typing
+    hlTimer = setTimeout(() => {
+      highlightCode(content, lang).then((tokens) => {
+        // Only apply if this is still the latest request
+        if (gen === hlGeneration) {
+          setHighlightTokens(tokens)
+        }
+      })
+    }, 100)
+  })
+
   // -- Editing helpers --
   const applyEdit = (newLines: string[], newRow: number, newCol: number) => {
     const newContent = newLines.join("\n")
@@ -73,8 +123,6 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (lines().length <= viewHeight && codeScrollRef.scrollTop > 0) {
       codeScrollRef.scrollTop = 0
     }
-    // Mirror scrollbar properties so the gutter clamps identically to the code
-    // (the code viewport is 1 row shorter due to the horizontal scrollbar).
     const codeBar = codeScrollRef.verticalScrollBar
     const gutterBar = gutterScrollRef.verticalScrollBar
     if (codeBar && gutterBar) {
@@ -106,22 +154,14 @@ const CodeViewer = (props: CodeViewerProps) => {
       const viewBottom = viewTop + viewHeight - 1
 
       if (row < viewTop) {
-        // Cursor scrolled above viewport — bring it into view with margin
         codeScrollRef.scrollTop = Math.max(0, row - SCROLL_MARGIN_Y)
       } else if (row > viewBottom) {
-        // Cursor scrolled below viewport — bring it into view with margin
-        codeScrollRef.scrollTop = Math.min(
-          totalLines - viewHeight,
-          row - viewHeight + 1 + SCROLL_MARGIN_Y
-        )
+        codeScrollRef.scrollTop = Math.min(totalLines - viewHeight, row - viewHeight + 1 + SCROLL_MARGIN_Y)
       } else if (row < viewTop + SCROLL_MARGIN_Y) {
-        // Cursor inside viewport but within top margin — nudge scroll up by 1
         codeScrollRef.scrollTop = Math.max(0, viewTop - 1)
       } else if (row > viewBottom - SCROLL_MARGIN_Y) {
-        // Cursor inside viewport but within bottom margin — nudge scroll down by 1
         codeScrollRef.scrollTop = Math.min(totalLines - viewHeight, viewTop + 1)
       }
-      // else: cursor is in the safe zone — do NOT touch scrollTop
     } else if (codeScrollRef.scrollTop !== 0) {
       codeScrollRef.scrollTop = 0
     }
@@ -166,7 +206,6 @@ const CodeViewer = (props: CodeViewerProps) => {
   /** Handle click on a line. e.x is global (absolute terminal column). */
   const handleLineClick = (lineIndex: number, e: any) => {
     resetBlink()
-    // Clear any text selection the renderer may have started
     renderer.clearSelection()
 
     const ls = lines()
@@ -389,23 +428,19 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (!codeScrollRef) return
     enableScrollX(codeScrollRef)
     constrainScrollbox(codeScrollRef, codeWidth(), props.availableHeight)
-    // Disable native keyboard scroll (we control scroll via scrollToCursor)
     codeScrollRef.handleKeyPress = () => false
-    // Disable text selection inside the code area
     codeScrollRef.selectable = false
     codeScrollRef.shouldStartSelection = () => false
     if (codeScrollRef.viewport) {
       codeScrollRef.viewport.selectable = false
       codeScrollRef.viewport.shouldStartSelection = () => false
     }
-    // Ignore text selections originating from the code area
     const origStartSelection = renderer.startSelection?.bind(renderer)
     if (origStartSelection) {
       renderer.startSelection = (renderable: any, x: number, y: number) => {
-        // Walk up from renderable to see if it's inside our code scrollbox
         let node = renderable
         while (node) {
-          if (node === codeScrollRef) return // Swallow selection
+          if (node === codeScrollRef) return
           node = node.parent
         }
         origStartSelection(renderable, x, y)
@@ -418,7 +453,6 @@ const CodeViewer = (props: CodeViewerProps) => {
         syncGutterScroll()
       }
     }
-    // Intercept scrollBy to prevent scrolling when content fits
     const origScrollBy = codeScrollRef.scrollBy?.bind(codeScrollRef)
     if (origScrollBy) {
       codeScrollRef.scrollBy = (opts: any) => {
@@ -428,7 +462,6 @@ const CodeViewer = (props: CodeViewerProps) => {
         syncGutterScroll()
       }
     }
-    // Intercept mouse wheel scroll
     const origMouseScroll = codeScrollRef.onMouseScroll?.bind(codeScrollRef)
     codeScrollRef.onMouseScroll = (e: any) => {
       const viewH = props.availableHeight - 1
@@ -484,6 +517,136 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
   })
 
+  // =====================================================================
+  //  Helpers: expand tokens with tab replacement for rendering
+  // =====================================================================
+
+  /**
+   * Expand a single Shiki token, replacing tabs with spaces.
+   * Returns one or more ColorTokens (tabs may split a token).
+   */
+  const expandTokenTabs = (token: ColorToken, tabSize = 4): ColorToken => {
+    if (token.content.indexOf("\t") === -1) return token
+    return { content: token.content.replace(/\t/g, " ".repeat(tabSize)), color: token.color }
+  }
+
+  /**
+   * Get expanded (tab-replaced) tokens for a given line index.
+   * Falls back to a single default-colored token when no highlight data.
+   */
+  const getLineTokens = (lineIndex: number, rawLine: string): ColorToken[] => {
+    const ht = highlightTokens()
+    // Only use cached tokens when they match the current line count,
+    // otherwise the async highlight result belongs to a stale version.
+    if (ht && ht.length === lines().length && ht[lineIndex] && ht[lineIndex].length > 0) {
+      const tokens: ColorToken[] = []
+      for (const t of ht[lineIndex]) {
+        tokens.push(expandTokenTabs(t))
+      }
+      return tokens
+    }
+    // Fallback: plain monochrome — always return at least one token so the
+    // <box> row keeps its height (empty [] would collapse to 0-height).
+    return [{ content: expandTabs(rawLine) || " ", color: DEFAULT_FG }]
+  }
+
+  /**
+   * Split tokens at a given *expanded* column position for cursor rendering.
+   *
+   * Returns { before: ColorToken[], cursorToken: ColorToken, after: ColorToken[] }
+   * where cursorToken is the single character (or space at EOL) under the cursor.
+   */
+  const splitTokensAtCursor = (
+    tokens: ColorToken[],
+    cursorExpPos: number,
+    cursorChLen: number
+  ): { before: ColorToken[]; cursorToken: ColorToken; after: ColorToken[] } => {
+    const before: ColorToken[] = []
+    const after: ColorToken[] = []
+    let cursorToken: ColorToken = { content: " ", color: DEFAULT_FG }
+    let pos = 0
+    let found = false
+
+    for (const t of tokens) {
+      const tEnd = pos + t.content.length
+      if (!found) {
+        if (cursorExpPos >= tEnd) {
+          // Entire token is before cursor
+          before.push(t)
+        } else if (cursorExpPos >= pos) {
+          // Cursor falls inside this token
+          const offset = cursorExpPos - pos
+          if (offset > 0) {
+            before.push({ content: t.content.slice(0, offset), color: t.color })
+          }
+          cursorToken = {
+            content: t.content.slice(offset, offset + cursorChLen) || " ",
+            color: t.color,
+          }
+          const remaining = t.content.slice(offset + cursorChLen)
+          if (remaining) {
+            after.push({ content: remaining, color: t.color })
+          }
+          found = true
+        }
+      } else {
+        after.push(t)
+      }
+      pos = tEnd
+    }
+
+    // Cursor past end of all tokens (EOL)
+    if (!found) {
+      cursorToken = { content: " ", color: DEFAULT_FG }
+    }
+
+    return { before, cursorToken, after }
+  }
+
+  /**
+   * Render token for a single segment of a line.
+   * `cursor` marks the token that sits under the cursor (blink-aware).
+   */
+  interface RenderToken extends ColorToken {
+    cursor?: boolean
+  }
+
+  /**
+   * Build the render-token array for a line.
+   * Active line → tokens are split around the cursor position.
+   * Inactive line → plain highlight tokens.
+   */
+  const buildLineTokens = (lineIndex: number, rawLine: string, active: boolean, col: number): RenderToken[] => {
+    const tokens = getLineTokens(lineIndex, rawLine)
+    if (!active) return tokens
+
+    const cursorExpPos = expandTabs(rawLine.slice(0, col)).length
+    const cursorChLen = col < rawLine.length ? expandTabs(rawLine[col]).length : 1
+    const { before, cursorToken, after } = splitTokensAtCursor(tokens, cursorExpPos, cursorChLen)
+
+    const result: RenderToken[] = []
+    for (const t of before) result.push(t)
+    result.push({ ...cursorToken, cursor: true })
+    for (const t of after) result.push(t)
+
+    // Trailing space so the cursor at EOL has somewhere to sit
+    if (after.length === 0 && cursorToken.content !== " ") {
+      result.push({ content: " ", color: DEFAULT_FG })
+    }
+    return result
+  }
+
+  /** Cursor-blink character — isolated component so only it reacts to blink. */
+  const CursorChar = (p: { token: ColorToken; bg: string }) => {
+    const cFg = () => (cursorVisible() ? "#1e1e1e" : p.token.color)
+    const cBg = () => (cursorVisible() ? p.token.color : p.bg)
+    return (
+      <text fg={cFg()} bg={cBg()} wrapMode="none">
+        {p.token.content}
+      </text>
+    )
+  }
+
   // -- Render --
 
   return (
@@ -538,57 +701,41 @@ const CodeViewer = (props: CodeViewerProps) => {
           >
             <box flexDirection="column" width={Math.max(maxLineLen() + 2, 1)}>
               <For each={lines()}>
-                {(line, i) => {
+                {(_, i) => {
                   const isActive = () => i() === cursorRow() && props.focused
-                  const lineBg = () => isActive() ? "#2a2d2e" : "#1e1e1e"
-                  const col = () => cursorCol()
-                  const rawLine = () => lines()[i()] || ""
+                  const lineBg = () => (isActive() ? "#2a2d2e" : "#1e1e1e")
+
+                  // Memo: recompute tokens only when line content, active state, or cursor col change
+                  // cursorVisible is NOT read here — blink is handled by <CursorChar> component
+                  const renderTokens = createMemo(() => {
+                    const raw = lines()[i()] || ""
+                    const active = isActive()
+                    const col = active ? cursorCol() : 0
+                    return buildLineTokens(i(), raw, active, col)
+                  })
+
+                  // Stable bg value for CursorChar (avoids reading isActive inside CursorChar)
+                  const activeBg = createMemo(() => lineBg())
 
                   return (
-                    <Show
-                      when={isActive()}
-                      fallback={
-                        <text
-                          fg="#d4d4d4"
-                          bg={lineBg()}
-                          wrapMode="none"
-                          onMouseDown={(e: any) => handleLineClick(i(), e)}
-                        >
-                          {expandTabs(line)}
-                        </text>
-                      }
+                    <box
+                      flexDirection="row"
+                      width="100%"
+                      backgroundColor={lineBg()}
+                      onMouseDown={(e: any) => handleLineClick(i(), e)}
                     >
-                      {(() => {
-                        const rl = rawLine()
-                        const expanded = expandTabs(rl)
-                        const cCol = col()
-                        const bg = lineBg()
-
-                        const cursorExpPos = expandTabs(rl.slice(0, cCol)).length
-                        const cursorCh = cCol < rl.length
-                          ? expanded.slice(cursorExpPos, cursorExpPos + expandTabs(rl[cCol]).length)
-                          : " "
-                        const cursorExpEnd = cursorExpPos + cursorCh.length
-                        const beforeCursor = expanded.slice(0, cursorExpPos)
-                        const afterCursor = expanded.slice(cursorExpEnd)
-
-                        const blink = cursorVisible()
-                        const cFg = blink ? "#1e1e1e" : "#d4d4d4"
-                        const cBg = blink ? "#d4d4d4" : bg
-
-                        return (
-                          <box
-                            flexDirection="row"
-                            width="100%"
-                            onMouseDown={(e: any) => handleLineClick(i(), e)}
-                          >
-                            <text fg="#d4d4d4" bg={bg} wrapMode="none">{beforeCursor}</text>
-                            <text fg={cFg} bg={cBg} wrapMode="none">{cursorCh}</text>
-                            <text fg="#d4d4d4" bg={bg} wrapMode="none">{afterCursor || " "}</text>
-                          </box>
-                        )
-                      })()}
-                    </Show>
+                      <For each={renderTokens()}>
+                        {(token: RenderToken) =>
+                          token.cursor ? (
+                            <CursorChar token={token} bg={activeBg()} />
+                          ) : (
+                            <text fg={token.color} bg={lineBg()} wrapMode="none">
+                              {token.content}
+                            </text>
+                          )
+                        }
+                      </For>
+                    </box>
                   )
                 }}
               </For>

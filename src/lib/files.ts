@@ -199,3 +199,55 @@ export function splitLines(content: string): string[] {
 export function gutterWidth(lineCount: number): number {
   return String(lineCount).length + 1
 }
+
+/** Maps file extension to Shiki BundledLanguage id. Returns null for unknown. */
+export function extToShikiLang(ext: string): string | null {
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    json: "json",
+    jsonc: "jsonc",
+    md: "markdown",
+    css: "css",
+    scss: "scss",
+    less: "less",
+    html: "html",
+    py: "python",
+    rs: "rust",
+    go: "go",
+    toml: "toml",
+    yaml: "yaml",
+    yml: "yaml",
+    sh: "bash",
+    bash: "bash",
+    zsh: "bash",
+    php: "php",
+    sql: "sql",
+    xml: "xml",
+    svg: "xml",
+    txt: "plaintext",
+    c: "c",
+    cpp: "cpp",
+    h: "c",
+    hpp: "cpp",
+    java: "java",
+    rb: "ruby",
+    lua: "lua",
+    swift: "swift",
+    kt: "kotlin",
+    dart: "dart",
+    vue: "vue",
+    svelte: "svelte",
+    dockerfile: "dockerfile",
+    makefile: "makefile",
+    graphql: "graphql",
+    prisma: "prisma",
+    env: "dotenv",
+    ini: "ini",
+    conf: "ini",
+    lock: "json",
+  }
+  return map[ext] || null
+}

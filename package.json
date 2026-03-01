@@ -23,6 +23,7 @@
     "@opentui/core": "^0.1.84",
     "@opentui/solid": "^0.1.84",
     "babel-preset-solid": "^1.9.10",
+    "shiki": "^4.0.0",
     "solid-js": "^1.9.11",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"

@@ -24,6 +24,10 @@ import CodeViewer from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
 import { enableScrollX } from "./lib/scrollbox"
+import { preloadHighlighter } from "./lib/highlighter"
+
+/** Start loading Shiki highlighter eagerly at boot */
+preloadHighlighter()
 
 /** Working directory used as project root */
 const CWD = process.cwd()
