@@ -2,9 +2,12 @@
  * Build script for Runo.
  *
  * Two-step process:
- *   1. Bun.build() bundles the app with SolidJS plugin (target: "bun", outdir: dist/)
- *   2. Patch the dynamic @opentui/core platform import to a static one for the target
- *   3. bun build --compile converts the bundle into a standalone binary
+ *   1. Bun.build() bundles the app with SolidJS plugin + platform binding resolution
+ *   2. bun build --compile converts the bundle into a standalone binary
+ *
+ * The @opentui/core package uses a dynamic import to load a platform-specific
+ * native binding at runtime. For cross-compilation, we intercept this and
+ * resolve it statically at build time.
  *
  * Usage:
  *   bun run build.ts                           # build for current platform
@@ -17,7 +20,43 @@ import ts from "@babel/preset-typescript"
 // @ts-expect-error
 import solid from "babel-preset-solid"
 import type { BunPlugin } from "bun"
-import { rmSync, readFileSync, writeFileSync } from "fs"
+import { rmSync, readFileSync, writeFileSync, existsSync } from "fs"
+import { resolve, dirname, join } from "path"
+
+/**
+ * Map bun compile target to @opentui/core platform package name.
+ * bun-linux-x64    -> @opentui/core-linux-x64
+ * bun-darwin-arm64 -> @opentui/core-darwin-arm64
+ * bun-windows-x64  -> @opentui/core-win32-x64
+ */
+function targetToPlatformPkg(target: string | undefined): string {
+  if (!target) {
+    const os = process.platform === "win32" ? "win32" : process.platform
+    return `@opentui/core-${os}-${process.arch}`
+  }
+  const parts = target.replace("bun-", "").split("-")
+  let os = parts[0]
+  const arch = parts[1]
+  if (os === "windows") os = "win32"
+  return `@opentui/core-${os}-${arch}`
+}
+
+/** Find the native .so/.dylib/.dll path for a platform package */
+function findNativeLib(pkg: string): string {
+  const pkgDir = resolve("node_modules", pkg.replace("@", "").replace("/", "/"))
+  const exts = ["libopentui.so", "libopentui.dylib", "opentui.dll"]
+  for (const ext of exts) {
+    const libPath = join(pkgDir, ext)
+    if (existsSync(libPath)) return libPath
+  }
+  // Fallback: check @scoped path
+  const scopedDir = resolve("node_modules", pkg)
+  for (const ext of exts) {
+    const libPath = join(scopedDir, ext)
+    if (existsSync(libPath)) return libPath
+  }
+  throw new Error(`Native library not found for ${pkg} in ${pkgDir} or ${scopedDir}`)
+}
 
 const solidPlugin: BunPlugin = {
   name: "solid-transform",
@@ -41,26 +80,6 @@ const solidPlugin: BunPlugin = {
   },
 }
 
-/**
- * Map bun compile target to @opentui/core platform package name.
- * bun-linux-x64   -> @opentui/core-linux-x64
- * bun-darwin-arm64 -> @opentui/core-darwin-arm64
- * bun-windows-x64  -> @opentui/core-win32-x64
- */
-function targetToPlatformPkg(target: string | undefined): string {
-  if (!target) {
-    // Current platform
-    const os = process.platform === "win32" ? "win32" : process.platform
-    return `@opentui/core-${os}-${process.arch}`
-  }
-  // target format: bun-<os>-<arch>  e.g. bun-linux-x64, bun-darwin-arm64, bun-windows-x64
-  const parts = target.replace("bun-", "").split("-")
-  let os = parts[0]
-  const arch = parts[1]
-  if (os === "windows") os = "win32"
-  return `@opentui/core-${os}-${arch}`
-}
-
 // Parse --target and --outfile from CLI args
 const args = process.argv.slice(2)
 let target: string | undefined
@@ -76,10 +95,12 @@ for (const arg of args) {
 }
 
 const platformPkg = targetToPlatformPkg(target)
+const nativeLibPath = findNativeLib(platformPkg)
 
 console.log(`Building Runo...`)
 if (target) console.log(`  Target: ${target}`)
 console.log(`  Platform binding: ${platformPkg}`)
+console.log(`  Native lib: ${nativeLibPath}`)
 console.log(`  Output: ${outfile}`)
 
 // Step 1: Bundle with SolidJS plugin (always target "bun" here)
@@ -105,22 +126,38 @@ if (!result.success) {
 
 console.log("Bundle succeeded!")
 
-// Step 2: Patch the dynamic platform import to a static one
+// Step 2: Patch the bundle to replace the dynamic platform import chain
+// with a direct file import of the native library.
+//
+// The bundle contains:
+//   await import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)
+// Which at runtime would do:
+//   const module = await import("./libopentui.so", { with: { type: "file" } })
+//   export default module.default  (the file path)
+//
+// We replace the entire dynamic import expression so it resolves to
+// a direct import of the native lib, which bun --compile can embed.
 const bundledFile = result.outputs[0].path
 let bundleCode = readFileSync(bundledFile, "utf-8")
 
-// Replace: import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)
-// With:    import("@opentui/core-<platform>-<arch>/index.ts")
+// Copy the native lib next to the bundle so relative import works
+const distLibPath = join(dirname(bundledFile), "libopentui.native")
+const { copyFileSync } = await import("fs")
+copyFileSync(nativeLibPath, distLibPath)
+
+// Replace the dynamic template import with inline code that imports the native lib directly
 const dynamicImportPattern = /import\(`@opentui\/core-\$\{process\.platform\}-\$\{process\.arch\}\/index\.ts`\)/g
-const staticImport = `import("${platformPkg}/index.ts")`
 const patchCount = (bundleCode.match(dynamicImportPattern) || []).length
 
+// The replacement: immediately resolve with the native lib path via file import
+const replacement = `import("./libopentui.native",{with:{type:"file"}}).then(m=>({default:m.default}))`
+
 if (patchCount > 0) {
-  bundleCode = bundleCode.replace(dynamicImportPattern, staticImport)
+  bundleCode = bundleCode.replace(dynamicImportPattern, replacement)
   writeFileSync(bundledFile, bundleCode)
-  console.log(`Patched ${patchCount} dynamic platform import(s) -> ${platformPkg}`)
+  console.log(`Patched ${patchCount} dynamic platform import(s) -> direct native lib`)
 } else {
-  console.log("No dynamic platform imports found to patch (may already be static)")
+  console.log("Warning: no dynamic platform imports found to patch")
 }
 
 // Step 3: Compile the patched bundle into a standalone binary
