@@ -31,6 +31,7 @@ import FileTree from "./components/FileTree"
 import CodeViewer from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
+import TitleBar from "./components/TitleBar"
 import { enableScrollX } from "./lib/scrollbox"
 import { preloadHighlighter } from "./lib/highlighter"
 import { parseCli } from "./cli"
@@ -251,13 +252,36 @@ const App = () => {
     }
   })
 
+  // -- Tab navigation helpers (used by keyboard shortcuts and TitleBar menus) --
+
+  const switchToNextTab = () => {
+    const t = tabs()
+    if (t.length > 1) {
+      const idx = t.findIndex((tab) => tab.path === openFile())
+      const next = t[(idx + 1) % t.length]
+      if (next) switchTab(next.path)
+    }
+  }
+
+  const switchToPrevTab = () => {
+    const t = tabs()
+    if (t.length > 1) {
+      const idx = t.findIndex((tab) => tab.path === openFile())
+      const prev = t[(idx - 1 + t.length) % t.length]
+      if (prev) switchTab(prev.path)
+    }
+  }
+
+  const toggleSidebar = () => {
+    setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
+  }
+
   // -- Keyboard shortcuts --
 
   useKeyboard((key) => {
     // Ctrl+B = switch focus between tree and editor (disabled in single-file mode)
-    // Note: Ctrl+Tab is not detectable in most terminals (same escape as Tab).
     if (key.ctrl && key.name === "b" && !singleFileMode) {
-      setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
+      toggleSidebar()
     }
 
     // Ctrl+C = exit
@@ -278,22 +302,12 @@ const App = () => {
 
     // Ctrl+PageDown = next tab
     if (key.ctrl && key.name === "pagedown") {
-      const t = tabs()
-      if (t.length > 1) {
-        const idx = t.findIndex((tab) => tab.path === openFile())
-        const next = t[(idx + 1) % t.length]
-        if (next) switchTab(next.path)
-      }
+      switchToNextTab()
     }
 
     // Ctrl+PageUp = previous tab
     if (key.ctrl && key.name === "pageup") {
-      const t = tabs()
-      if (t.length > 1) {
-        const idx = t.findIndex((tab) => tab.path === openFile())
-        const prev = t[(idx - 1 + t.length) % t.length]
-        if (prev) switchTab(prev.path)
-      }
+      switchToPrevTab()
     }
 
     // Shift+Arrow = horizontal/vertical scroll on sidebar when focused
@@ -323,16 +337,16 @@ const App = () => {
   if (singleFileMode) {
     return (
       <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
-        {/* Title bar: file path + terminal dimensions */}
-        <box width="100%" height={1} backgroundColor="#323233">
-          <text fg="#cccccc" bg="#323233" attributes={1}>
-            {` ${basename(SINGLE_FILE!)} - ${SINGLE_FILE!} `}
-          </text>
-          <box flexGrow={1} backgroundColor="#323233" />
-          <text fg="#666666" bg="#323233">
-            {` ${dimensions().width}x${dimensions().height} `}
-          </text>
-        </box>
+        <TitleBar
+          projectName={basename(SINGLE_FILE!)}
+          activeFileName={basename(SINGLE_FILE!)}
+          isDirty={isCurrentFileDirty()}
+          termWidth={dimensions().width}
+          termHeight={dimensions().height}
+          onExit={() => renderer.destroy()}
+          onSave={saveFile}
+          singleFileMode={true}
+        />
 
         {/* Editor at full width */}
         <box flexDirection="column" flexGrow={1} width="100%" height="100%">
@@ -375,16 +389,22 @@ const App = () => {
   // Full IDE mode: sidebar + tabs + editor
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
-      {/* Title bar: project path + terminal dimensions */}
-      <box width="100%" height={1} backgroundColor="#323233">
-        <text fg="#cccccc" bg="#323233" attributes={1}>
-          {` Runo - ${CWD} `}
-        </text>
-        <box flexGrow={1} backgroundColor="#323233" />
-        <text fg="#666666" bg="#323233">
-          {` ${dimensions().width}x${dimensions().height} `}
-        </text>
-      </box>
+      <TitleBar
+        projectName={basename(CWD)}
+        activeFileName={openFile() ? basename(openFile()!) : null}
+        isDirty={isCurrentFileDirty()}
+        termWidth={dimensions().width}
+        termHeight={dimensions().height}
+        onExit={() => renderer.destroy()}
+        onSave={saveFile}
+        onCloseTab={() => {
+          const active = openFile()
+          if (active) closeTab(active)
+        }}
+        onToggleSidebar={toggleSidebar}
+        onNextTab={switchToNextTab}
+        onPrevTab={switchToPrevTab}
+      />
 
       {/* Main area: sidebar + resize handle + editor */}
       <box flexDirection="row" flexGrow={1} width="100%">
