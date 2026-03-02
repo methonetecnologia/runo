@@ -254,8 +254,9 @@ const App = () => {
   // -- Keyboard shortcuts --
 
   useKeyboard((key) => {
-    // Tab = switch focus between tree and editor (disabled in single-file mode)
-    if (key.name === "tab" && !singleFileMode) {
+    // Ctrl+B = switch focus between tree and editor (disabled in single-file mode)
+    // Note: Ctrl+Tab is not detectable in most terminals (same escape as Tab).
+    if (key.ctrl && key.name === "b" && !singleFileMode) {
       setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
     }
 
@@ -273,6 +274,26 @@ const App = () => {
     if (key.ctrl && key.name === "w") {
       const active = openFile()
       if (active) closeTab(active)
+    }
+
+    // Ctrl+PageDown = next tab
+    if (key.ctrl && key.name === "pagedown") {
+      const t = tabs()
+      if (t.length > 1) {
+        const idx = t.findIndex((tab) => tab.path === openFile())
+        const next = t[(idx + 1) % t.length]
+        if (next) switchTab(next.path)
+      }
+    }
+
+    // Ctrl+PageUp = previous tab
+    if (key.ctrl && key.name === "pageup") {
+      const t = tabs()
+      if (t.length > 1) {
+        const idx = t.findIndex((tab) => tab.path === openFile())
+        const prev = t[(idx - 1 + t.length) % t.length]
+        if (prev) switchTab(prev.path)
+      }
     }
 
     // Shift+Arrow = horizontal/vertical scroll on sidebar when focused
@@ -401,6 +422,8 @@ const App = () => {
                 onSelect={handleOpenFile}
                 onToggle={handleToggleDir}
                 onFocus={() => setActivePanel("tree")}
+                scrollRef={sidebarScrollRef}
+                availableHeight={dimensions().height - 3}
               />
             </scrollbox>
           </ErrorBoundary>

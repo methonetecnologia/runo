@@ -28,9 +28,7 @@ const StatusBar = (props: StatusBarProps) => {
       </text>
       <box flexGrow={1} backgroundColor="#007acc" />
       <text fg="#ffffff" bg="#007acc">
-        {props.filePath && props.cursorLine
-          ? ` Ln ${props.cursorLine}, Col ${props.cursorCol ?? 1} `
-          : ""}
+        {props.filePath && props.cursorLine ? ` Ln ${props.cursorLine}, Col ${props.cursorCol ?? 1} ` : ""}
       </text>
       <text fg="#ffffff" bg="#005a9e">
         {props.filePath ? ` Lines: ${props.lineCount} ` : ""}
@@ -39,7 +37,7 @@ const StatusBar = (props: StatusBarProps) => {
         {props.isDirty ? " Ctrl+S: save " : ""}
       </text>
       <text fg="#ffffff" bg="#005a9e">
-        {" Tab/Ctrl+C "}
+        {" Ctrl+B/Ctrl+C "}
       </text>
     </box>
   )
