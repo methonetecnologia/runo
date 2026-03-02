@@ -1,6 +1,6 @@
 # Runo
 
-A terminal-based IDE inspired by VS Code, built entirely on top of [OpenTUI](https://github.com/murat-sen-tr/opentui) and [SolidJS](https://www.solidjs.com/).
+A terminal-based IDE inspired by VS Code, built entirely on top of [OpenTUI](https://github.com/anomalyco/opentui) and [SolidJS](https://www.solidjs.com/).
 
 Runo aims to bring the familiar features of visual IDEs like VS Code into the terminal, offering a lightweight and performant alternative for developers who prefer or need to work in terminal environments.
 
@@ -31,27 +31,27 @@ Runo bridges that gap: **a VS Code-like experience that runs in your terminal.**
 
 ## Built with AI
 
-This project was created in collaboration with multiple AI models, alternated throughout the development process using the [opencode](https://github.com/nicholascostadev/opencode) agent tool.
+This project was created in collaboration with multiple AI models, alternated throughout the development process using the [opencode](https://github.com/anomalyco/opencode) agent tool.
 
 [Methone Tecnologia](https://github.com/methonetecnologia) believes in a world where AI can be used as a force for good, amplifying the productive capacity of developers around the globe. Runo is a direct product of that belief — built by a human developer working alongside AI agents as coding partners.
 
-The author's interest in building a terminal IDE came directly from using opencode, which introduced him to [OpenTUI](https://github.com/murat-sen-tr/opentui) — the terminal rendering engine that powers Runo's entire UI.
+The author's interest in building a terminal IDE came directly from using opencode, which introduced him to [OpenTUI](https://github.com/anomalyco/opentui) — the terminal rendering engine that powers Runo's entire UI.
 
 ## Architecture & OpenTUI Dependency
 
 Runo's rendering layer depends entirely on **OpenTUI** (`@opentui/core` + `@opentui/solid`). OpenTUI provides the terminal rendering primitives (`<box>`, `<text>`, `<scrollbox>`) that make the IDE's layout possible.
 
-**For contributors and maintainers:** if a feature requires complex terminal rendering capabilities that don't exist yet (e.g., advanced input handling, new layout modes, accessibility), those should be implemented upstream in [OpenTUI](https://github.com/murat-sen-tr/opentui) first. Once accepted and released there, we can integrate them into Runo.
+**For contributors and maintainers:** if a feature requires complex terminal rendering capabilities that don't exist yet (e.g., advanced input handling, new layout modes, accessibility), those should be implemented upstream in [OpenTUI](https://github.com/anomalyco/opentui) first. Once accepted and released there, we can integrate them into Runo.
 
 ### Tech Stack
 
-| Layer               | Technology                                         |
-| ------------------- | -------------------------------------------------- |
-| Runtime             | [Bun](https://bun.sh/)                             |
-| UI Framework        | [SolidJS](https://www.solidjs.com/)                |
-| Terminal Renderer   | [OpenTUI](https://github.com/murat-sen-tr/opentui) |
-| Syntax Highlighting | [Shiki](https://shiki.style/)                      |
-| Language            | TypeScript / TSX                                   |
+| Layer               | Technology                                      |
+| ------------------- | ----------------------------------------------- |
+| Runtime             | [Bun](https://bun.sh/)                          |
+| UI Framework        | [SolidJS](https://www.solidjs.com/)             |
+| Terminal Renderer   | [OpenTUI](https://github.com/anomalyco/opentui) |
+| Syntax Highlighting | [Shiki](https://shiki.style/)                   |
+| Language            | TypeScript / TSX                                |
 
 ### Project Structure
 
@@ -146,7 +146,7 @@ bun run ci           # Full CI pipeline (lint + format check + tests)
 Contributions are welcome. Before submitting a PR:
 
 1. Make sure `bun run ci` passes
-2. If your change requires new terminal rendering capabilities, consider contributing to [OpenTUI](https://github.com/murat-sen-tr/opentui) first
+2. If your change requires new terminal rendering capabilities, consider contributing to [OpenTUI](https://github.com/anomalyco/opentui) first
 3. Keep the codebase simple and maintainable — avoid unnecessary abstractions
 
 ## License
