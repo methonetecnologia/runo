@@ -16,7 +16,7 @@
  */
 
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, createMemo, onMount } from "solid-js"
+import { createSignal, createMemo, onMount, ErrorBoundary } from "solid-js"
 import { basename } from "path"
 import {
   scanDirectory,
@@ -315,19 +315,27 @@ const App = () => {
 
         {/* Editor at full width */}
         <box flexDirection="column" flexGrow={1} width="100%" height="100%">
-          <CodeViewer
-            filePath={openFile()}
-            content={fileContent()}
-            focused={true}
-            availableWidth={dimensions().width}
-            availableHeight={dimensions().height - 2}
-            codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
-            onContentChange={handleContentChange}
-            onCursorChange={(ln, col) => {
-              setCursorLine(ln)
-              setCursorCol(col)
-            }}
-          />
+          <ErrorBoundary
+            fallback={(err: Error) => (
+              <box flexGrow={1} justifyContent="center" alignItems="center" backgroundColor="#1e1e1e">
+                <text fg="#f44747">Editor error: {err.message}</text>
+              </box>
+            )}
+          >
+            <CodeViewer
+              filePath={openFile()}
+              content={fileContent()}
+              focused={true}
+              availableWidth={dimensions().width}
+              availableHeight={dimensions().height - 2}
+              codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
+              onContentChange={handleContentChange}
+              onCursorChange={(ln, col) => {
+                setCursorLine(ln)
+                setCursorCol(col)
+              }}
+            />
+          </ErrorBoundary>
         </box>
 
         {/* Status bar */}
@@ -372,22 +380,30 @@ const App = () => {
               {" EXPLORER"}
             </text>
           </box>
-          <scrollbox
-            ref={sidebarScrollRef}
-            flexGrow={1}
-            width="100%"
-            focused={activePanel() === "tree"}
-            scrollX={true}
-            scrollY={true}
+          <ErrorBoundary
+            fallback={(err: Error) => (
+              <box flexGrow={1} backgroundColor="#252526">
+                <text fg="#f44747">Tree error: {err.message}</text>
+              </box>
+            )}
           >
-            <FileTree
-              files={files()}
+            <scrollbox
+              ref={sidebarScrollRef}
+              flexGrow={1}
+              width="100%"
               focused={activePanel() === "tree"}
-              onSelect={handleOpenFile}
-              onToggle={handleToggleDir}
-              onFocus={() => setActivePanel("tree")}
-            />
-          </scrollbox>
+              scrollX={true}
+              scrollY={true}
+            >
+              <FileTree
+                files={files()}
+                focused={activePanel() === "tree"}
+                onSelect={handleOpenFile}
+                onToggle={handleToggleDir}
+                onFocus={() => setActivePanel("tree")}
+              />
+            </scrollbox>
+          </ErrorBoundary>
         </box>
 
         {/* Resize handle: 1-column draggable border between sidebar and editor */}
@@ -427,19 +443,27 @@ const App = () => {
             onClose={closeTab}
             onPin={pinTab}
           />
-          <CodeViewer
-            filePath={openFile()}
-            content={fileContent()}
-            focused={activePanel() === "editor"}
-            availableWidth={dimensions().width - clampedSidebarWidth() - 1}
-            availableHeight={dimensions().height - 3}
-            codeStartX={clampedSidebarWidth() + 1 + gutterWidth(splitLines(fileContent()).length) + 1}
-            onContentChange={handleContentChange}
-            onCursorChange={(ln, col) => {
-              setCursorLine(ln)
-              setCursorCol(col)
-            }}
-          />
+          <ErrorBoundary
+            fallback={(err: Error) => (
+              <box flexGrow={1} justifyContent="center" alignItems="center" backgroundColor="#1e1e1e">
+                <text fg="#f44747">Editor error: {err.message}</text>
+              </box>
+            )}
+          >
+            <CodeViewer
+              filePath={openFile()}
+              content={fileContent()}
+              focused={activePanel() === "editor"}
+              availableWidth={dimensions().width - clampedSidebarWidth() - 1}
+              availableHeight={dimensions().height - 3}
+              codeStartX={clampedSidebarWidth() + 1 + gutterWidth(splitLines(fileContent()).length) + 1}
+              onContentChange={handleContentChange}
+              onCursorChange={(ln, col) => {
+                setCursorLine(ln)
+                setCursorCol(col)
+              }}
+            />
+          </ErrorBoundary>
         </box>
       </box>
 
