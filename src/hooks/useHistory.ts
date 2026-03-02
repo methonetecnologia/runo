@@ -2,9 +2,15 @@
  * Undo/redo history stack for the text editor.
  *
  * Stores snapshots of content + cursor position.
- * Consecutive character inserts within a short window are grouped
- * into a single undo entry to avoid one-char-at-a-time undo.
+ * Groups consecutive edits like VS Code:
+ *   - Typing letters/digits groups within a time window
+ *   - Space, enter, backspace, delete, tab, paste always break the group
+ *   - Changing edit type (e.g. typing → backspace) breaks the group
  */
+
+import { log } from "../lib/logger"
+
+const h = log.history
 
 /** A single history entry: content + cursor position */
 interface HistoryEntry {
@@ -13,19 +19,21 @@ interface HistoryEntry {
   cursorCol: number
 }
 
+/** Edit types that control undo grouping */
+export type EditType = "char" | "space" | "return" | "backspace" | "delete" | "tab" | "paste"
+
 const MAX_HISTORY = 200
 
-/** Grouping window: consecutive edits within this interval (ms) are merged */
-const GROUP_INTERVAL = 400
+/** Time window for grouping consecutive same-type char edits (ms) */
+const GROUP_INTERVAL = 300
+
+/** Edit types that always create a new undo entry (never grouped) */
+const BREAK_TYPES: Set<EditType> = new Set(["return", "paste"])
 
 export interface UseHistoryReturn {
-  /** Push a new state onto the undo stack. Call after every edit. */
-  push: (content: string, cursorRow: number, cursorCol: number) => void
-  /** Undo: returns previous state or null if at bottom of stack */
+  push: (content: string, cursorRow: number, cursorCol: number, editType?: EditType) => void
   undo: () => HistoryEntry | null
-  /** Redo: returns next state or null if at top of stack */
   redo: () => HistoryEntry | null
-  /** Reset history (e.g. when switching files) */
   reset: (content: string, cursorRow: number, cursorCol: number) => void
 }
 
@@ -33,44 +41,59 @@ export function useHistory(): UseHistoryReturn {
   let undoStack: HistoryEntry[] = []
   let redoStack: HistoryEntry[] = []
   let lastPushTime = 0
+  let lastEditType: EditType | null = null
 
-  const push = (content: string, cursorRow: number, cursorCol: number) => {
+  const push = (content: string, cursorRow: number, cursorCol: number, editType: EditType = "char") => {
     const now = Date.now()
     const entry: HistoryEntry = { content, cursorRow, cursorCol }
 
-    // Group rapid consecutive edits into one entry
-    if (undoStack.length > 0 && now - lastPushTime < GROUP_INTERVAL) {
-      // Replace top entry instead of pushing a new one
+    const timeDelta = now - lastPushTime
+    const sameType = editType === lastEditType
+    const shouldGroup = undoStack.length > 0 && sameType && timeDelta < GROUP_INTERVAL && !BREAK_TYPES.has(editType)
+
+    if (shouldGroup) {
       undoStack[undoStack.length - 1] = entry
+      h.debug({ type: editType, contentLen: content.length, undo: undoStack.length }, "push(grouped)")
     } else {
       undoStack.push(entry)
       if (undoStack.length > MAX_HISTORY) {
         undoStack.shift()
       }
+      h.debug({ type: editType, contentLen: content.length, undo: undoStack.length }, "push(new)")
     }
 
-    // Any new edit clears the redo stack
     redoStack = []
     lastPushTime = now
+    lastEditType = editType
   }
 
   const undo = (): HistoryEntry | null => {
-    if (undoStack.length === 0) return null
+    h.info({ undo: undoStack.length, redo: redoStack.length }, "undo called")
 
-    // Pop current state → push to redo
+    if (undoStack.length <= 1) {
+      h.warn({ undo: undoStack.length }, "undo ignored — nothing to undo")
+      return null
+    }
+
     const current = undoStack.pop()!
     redoStack.push(current)
 
-    // Return the previous state (now top of undo stack)
-    if (undoStack.length === 0) return null
-    return undoStack[undoStack.length - 1]
+    const target = undoStack[undoStack.length - 1]
+    h.info({ contentLen: target.content.length, undo: undoStack.length, redo: redoStack.length }, "undo → restoring")
+    return target
   }
 
   const redo = (): HistoryEntry | null => {
-    if (redoStack.length === 0) return null
+    h.info({ undo: undoStack.length, redo: redoStack.length }, "redo called")
+
+    if (redoStack.length === 0) {
+      h.warn("redo ignored — nothing to redo")
+      return null
+    }
 
     const entry = redoStack.pop()!
     undoStack.push(entry)
+    h.info({ contentLen: entry.content.length, undo: undoStack.length, redo: redoStack.length }, "redo → restoring")
     return entry
   }
 
@@ -78,6 +101,8 @@ export function useHistory(): UseHistoryReturn {
     undoStack = [{ content, cursorRow, cursorCol }]
     redoStack = []
     lastPushTime = 0
+    lastEditType = null
+    h.info({ contentLen: content.length }, "reset")
   }
 
   return { push, undo, redo, reset }

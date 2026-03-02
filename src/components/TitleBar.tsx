@@ -15,12 +15,8 @@ import { createSignal, Show } from "solid-js"
 import MenuDropdown, { type MenuItem } from "./MenuDropdown"
 
 interface TitleBarProps {
-  /** Project/folder name (basename of CWD) */
-  projectName: string
-  /** Active file name (basename) or null */
-  activeFileName: string | null
-  /** Whether active file has unsaved changes */
-  isDirty: boolean
+  /** Absolute path to display in the title bar (CWD or single file path) */
+  titlePath: string
   /** Terminal width */
   termWidth: number
   /** Terminal height */
@@ -34,6 +30,9 @@ interface TitleBarProps {
   onToggleSidebar?: () => void
   onNextTab?: () => void
   onPrevTab?: () => void
+  onUndo?: () => void
+  onRedo?: () => void
+  onAbout?: () => void
   /** Whether we're in single-file mode (hides some menu items) */
   singleFileMode?: boolean
 }
@@ -41,6 +40,7 @@ interface TitleBarProps {
 const TitleBar = (props: TitleBarProps) => {
   const [openMenu, setOpenMenu] = createSignal<string | null>(null)
   const [closeHover, setCloseHover] = createSignal(false)
+  const [hoveredLabel, setHoveredLabel] = createSignal<string | null>(null)
 
   // -- Menu definitions --
 
@@ -60,8 +60,8 @@ const TitleBar = (props: TitleBarProps) => {
   }
 
   const editItems = (): MenuItem[] => [
-    { label: "Undo", shortcut: "Ctrl+Z" },
-    { label: "Redo", shortcut: "Ctrl+Y" },
+    { label: "Undo", shortcut: "Ctrl+Z", action: props.onUndo },
+    { label: "Redo", shortcut: "Ctrl+Y", action: props.onRedo },
   ]
 
   const viewItems = (): MenuItem[] => {
@@ -76,15 +76,15 @@ const TitleBar = (props: TitleBarProps) => {
     return items
   }
 
-  const helpItems = (): MenuItem[] => [{ label: "About Runo" }]
+  const helpItems = (): MenuItem[] => [{ label: "About Runo", action: props.onAbout }]
 
   // -- Menu label positions (approximate char offsets) --
-  // " Runo " = 6 chars, then each label + spacing
+  // " Runo " = 6 chars, then " File " = 6, " Edit " = 6, " View " = 6, " Help " = 6
   const menuPositions: Record<string, number> = {
-    file: 7,
-    edit: 13,
-    view: 19,
-    help: 25,
+    file: 6,
+    edit: 12,
+    view: 18,
+    help: 24,
   }
 
   // Toggle or switch menu
@@ -94,32 +94,32 @@ const TitleBar = (props: TitleBarProps) => {
 
   // Hover-switch: if a menu is already open and user hovers another label, switch
   const hoverMenu = (name: string) => {
+    setHoveredLabel(name)
     if (openMenu() !== null && openMenu() !== name) {
       setOpenMenu(name)
     }
   }
 
+  const unhoverMenu = (name: string) => {
+    if (hoveredLabel() === name) setHoveredLabel(null)
+  }
+
   const closeMenu = () => setOpenMenu(null)
 
   // -- Centered title --
-  const title = () => {
-    const file = props.activeFileName
-    const dirty = props.isDirty ? " *" : ""
-    if (file) return `${file}${dirty} - ${props.projectName}`
-    return props.projectName
+  const title = () => props.titlePath
+
+  // -- Menu label helpers --
+  const labelFg = (name: string) => {
+    if (openMenu() === name) return "#ffffff"
+    if (hoveredLabel() === name) return "#ffffff"
+    return "#cccccc"
   }
 
-  // -- Menu label component --
-  const MenuLabel = (p: { name: string; label: string }) => {
-    const isActive = () => openMenu() === p.name
-    const fg = () => (isActive() ? "#ffffff" : "#cccccc")
-    const bg = () => (isActive() ? "#094771" : "#323233")
-
-    return (
-      <text fg={fg()} bg={bg()} onMouseDown={() => toggleMenu(p.name)} onMouseOver={() => hoverMenu(p.name)}>
-        {` ${p.label} `}
-      </text>
-    )
+  const labelBg = (name: string) => {
+    if (openMenu() === name) return "#094771"
+    if (hoveredLabel() === name) return "#454545"
+    return "#323233"
   }
 
   // -- Active menu items --
@@ -138,49 +138,88 @@ const TitleBar = (props: TitleBarProps) => {
     return 0
   }
 
+  const hasViewItems = () => viewItems().length > 0
+
   return (
-    <>
-      <box width="100%" height={1} backgroundColor="#323233" flexDirection="row">
-        {/* Runo badge */}
-        <text fg="#ffffff" bg="#007acc" attributes={1}>
-          {" Runo "}
-        </text>
+    <box width="100%" height={1} backgroundColor="#323233" flexDirection="row" overflow="visible">
+      {/* Runo badge */}
+      <text fg="#ffffff" bg="#007acc" attributes={1}>
+        {" Runo "}
+      </text>
 
-        {/* Menu labels */}
-        <MenuLabel name="file" label="File" />
-        <MenuLabel name="edit" label="Edit" />
-        <Show when={viewItems().length > 0}>
-          <MenuLabel name="view" label="View" />
-        </Show>
-        <MenuLabel name="help" label="Help" />
-
-        {/* Center: title */}
-        <box flexGrow={1} justifyContent="center" backgroundColor="#323233">
-          <text fg="#999999" bg="#323233">
-            {title()}
-          </text>
-        </box>
-
-        {/* Right: dimensions */}
-        <text fg="#666666" bg="#323233">
-          {`${props.termWidth}x${props.termHeight} `}
-        </text>
-
-        {/* Close button */}
+      {/* Menu labels */}
+      <text
+        fg={labelFg("file")}
+        bg={labelBg("file")}
+        onMouseDown={() => toggleMenu("file")}
+        onMouseOver={() => hoverMenu("file")}
+        onMouseOut={() => unhoverMenu("file")}
+      >
+        {" File "}
+      </text>
+      <text
+        fg={labelFg("edit")}
+        bg={labelBg("edit")}
+        onMouseDown={() => toggleMenu("edit")}
+        onMouseOver={() => hoverMenu("edit")}
+        onMouseOut={() => unhoverMenu("edit")}
+      >
+        {" Edit "}
+      </text>
+      <Show when={hasViewItems()}>
         <text
-          fg={closeHover() ? "#ffffff" : "#999999"}
-          bg={closeHover() ? "#e81123" : "#323233"}
-          onMouseOver={() => setCloseHover(true)}
-          onMouseOut={() => setCloseHover(false)}
-          onMouseDown={() => props.onExit()}
+          fg={labelFg("view")}
+          bg={labelBg("view")}
+          onMouseDown={() => toggleMenu("view")}
+          onMouseOver={() => hoverMenu("view")}
+          onMouseOut={() => unhoverMenu("view")}
         >
-          {" \u2715 "}
+          {" View "}
+        </text>
+      </Show>
+      <text
+        fg={labelFg("help")}
+        bg={labelBg("help")}
+        onMouseDown={() => toggleMenu("help")}
+        onMouseOver={() => hoverMenu("help")}
+        onMouseOut={() => unhoverMenu("help")}
+      >
+        {" Help "}
+      </text>
+
+      {/* Center: title */}
+      <box flexGrow={1} justifyContent="center" backgroundColor="#323233">
+        <text fg="#999999" bg="#323233">
+          {title()}
         </text>
       </box>
 
+      {/* Right: dimensions */}
+      <text fg="#666666" bg="#323233">
+        {`${props.termWidth}x${props.termHeight} `}
+      </text>
+
+      {/* Close button */}
+      <text
+        fg={closeHover() ? "#ffffff" : "#999999"}
+        bg={closeHover() ? "#e81123" : "#323233"}
+        onMouseOver={() => setCloseHover(true)}
+        onMouseOut={() => setCloseHover(false)}
+        onMouseDown={() => props.onExit()}
+      >
+        {" \u2715 "}
+      </text>
+
       {/* Dropdown overlay */}
-      <MenuDropdown items={activeItems()} left={activeMenuLeft()} open={openMenu() !== null} onClose={closeMenu} />
-    </>
+      <MenuDropdown
+        items={activeItems()}
+        left={activeMenuLeft()}
+        open={openMenu() !== null}
+        onClose={closeMenu}
+        termWidth={props.termWidth}
+        termHeight={props.termHeight}
+      />
+    </box>
   )
 }
 

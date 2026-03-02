@@ -16,7 +16,7 @@
  */
 
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, createMemo, onMount, ErrorBoundary } from "solid-js"
+import { createSignal, createMemo, onMount, Show, ErrorBoundary, batch } from "solid-js"
 import { basename } from "path"
 import {
   scanDirectory,
@@ -28,13 +28,16 @@ import {
   type FileEntry,
 } from "./lib/files"
 import FileTree from "./components/FileTree"
-import CodeViewer from "./components/CodeViewer"
+import CodeViewer, { type CodeViewerHandle } from "./components/CodeViewer"
 import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
 import TitleBar from "./components/TitleBar"
 import { enableScrollX } from "./lib/scrollbox"
 import { preloadHighlighter } from "./lib/highlighter"
 import { parseCli } from "./cli"
+import { log } from "./lib/logger"
+// @ts-ignore — JSON import for version
+import pkg from "../package.json"
 
 /** Handle CLI subcommands (upgrade, --version, --help) before TUI boot */
 const cliOptions = await parseCli()
@@ -138,30 +141,29 @@ const App = () => {
    * - If the file is already open (pinned or preview), just switch to it
    */
   const handleOpenFile = (entry: FileEntry) => {
+    log.app.info({ path: entry.path }, "openFile")
     const content = readFileContent(entry.path)
-    setOpenFile(entry.path)
-    setFileContent(content)
-    setActivePanel("editor")
 
-    const currentTabs = tabs()
-    const existing = currentTabs.find((t) => t.path === entry.path)
+    batch(() => {
+      setOpenFile(entry.path)
+      setFileContent(content)
+      setActivePanel("editor")
 
-    if (existing) {
-      // Already open — just switch to it (don't change mode)
-      return
-    }
+      const currentTabs = tabs()
+      const existing = currentTabs.find((t) => t.path === entry.path)
 
-    // Replace existing preview tab with new preview, or add new preview
-    const previewIndex = currentTabs.findIndex((t) => t.mode === "preview")
-    if (previewIndex !== -1) {
-      // Replace the old preview tab
-      const updated = [...currentTabs]
-      updated[previewIndex] = { path: entry.path, name: basename(entry.path), mode: "preview" }
-      setTabs(updated)
-    } else {
-      // No preview tab exists — add a new one
-      setTabs([...currentTabs, { path: entry.path, name: basename(entry.path), mode: "preview" }])
-    }
+      if (existing) return
+
+      // Replace existing preview tab with new preview, or add new preview
+      const previewIndex = currentTabs.findIndex((t) => t.mode === "preview")
+      if (previewIndex !== -1) {
+        const updated = [...currentTabs]
+        updated[previewIndex] = { path: entry.path, name: basename(entry.path), mode: "preview" }
+        setTabs(updated)
+      } else {
+        setTabs([...currentTabs, { path: entry.path, name: basename(entry.path), mode: "preview" }])
+      }
+    })
   }
 
   /**
@@ -181,22 +183,24 @@ const App = () => {
     if (index === -1) return
 
     const newTabs = currentTabs.filter((t) => t.path !== path)
-    setTabs(newTabs)
 
-    // If we closed the active tab, switch to a neighbor or clear
-    if (openFile() === path) {
-      if (newTabs.length === 0) {
-        setOpenFile(null)
-        setFileContent("")
-      } else {
-        // Prefer the tab at the same index, or the last one
-        const nextIndex = Math.min(index, newTabs.length - 1)
-        const nextTab = newTabs[nextIndex]
-        const content = readFileContent(nextTab.path)
-        setOpenFile(nextTab.path)
-        setFileContent(content)
+    batch(() => {
+      setTabs(newTabs)
+
+      // If we closed the active tab, switch to a neighbor or clear
+      if (openFile() === path) {
+        if (newTabs.length === 0) {
+          setOpenFile(null)
+          setFileContent("")
+        } else {
+          const nextIndex = Math.min(index, newTabs.length - 1)
+          const nextTab = newTabs[nextIndex]
+          const content = readFileContent(nextTab.path)
+          setOpenFile(nextTab.path)
+          setFileContent(content)
+        }
       }
-    }
+    })
   }
 
   /**
@@ -204,13 +208,17 @@ const App = () => {
    */
   const switchTab = (path: string) => {
     if (openFile() === path) return
+    log.app.info({ path }, "switchTab")
     const content = readFileContent(path)
-    setOpenFile(path)
-    setFileContent(content)
-    setActivePanel("editor")
+    batch(() => {
+      setOpenFile(path)
+      setFileContent(content)
+      setActivePanel("editor")
+    })
   }
 
   const handleContentChange = (newContent: string) => {
+    log.app.debug({ contentLen: newContent.length }, "handleContentChange")
     setFileContent(newContent)
     const path = openFile()
     if (path) {
@@ -225,6 +233,7 @@ const App = () => {
   const saveFile = () => {
     const path = openFile()
     if (!path) return
+    log.app.info({ path }, "saveFile")
     const success = writeFileContent(path, fileContent())
     if (success) {
       const updated = new Set(dirtyFiles())
@@ -279,6 +288,15 @@ const App = () => {
   // -- Keyboard shortcuts --
 
   useKeyboard((key) => {
+    // Close About modal on Escape
+    if (key.name === "escape" && showAbout()) {
+      setShowAbout(false)
+      return
+    }
+
+    // Block all other shortcuts while About is open
+    if (showAbout()) return
+
     // Ctrl+B = switch focus between tree and editor (disabled in single-file mode)
     if (key.ctrl && key.name === "b" && !singleFileMode) {
       toggleSidebar()
@@ -331,6 +349,63 @@ const App = () => {
     return "#3c3c3c"
   }
 
+  // -- CodeViewer imperative handle (undo/redo) --
+  const [editorHandle, setEditorHandle] = createSignal<CodeViewerHandle | null>(null)
+
+  // -- About modal state --
+  const [showAbout, setShowAbout] = createSignal(false)
+
+  const AboutModal = () => {
+    const w = 40
+    const h = 9
+    const left = () => Math.max(0, Math.floor((dimensions().width - w) / 2))
+    const top = () => Math.max(0, Math.floor((dimensions().height - h) / 2))
+
+    return (
+      <Show when={showAbout()}>
+        {/* Backdrop */}
+        <box
+          position="absolute"
+          left={0}
+          top={0}
+          width="100%"
+          height="100%"
+          zIndex={199}
+          onMouseDown={() => setShowAbout(false)}
+        />
+        {/* Modal */}
+        <box
+          position="absolute"
+          left={left()}
+          top={top()}
+          width={w}
+          height={h}
+          zIndex={200}
+          flexDirection="column"
+          backgroundColor="#252526"
+          border
+          borderStyle="single"
+          borderColor="#007acc"
+          alignItems="center"
+          justifyContent="center"
+        >
+          <text fg="#007acc" attributes={1}>
+            Runo
+          </text>
+          <text fg="#cccccc" marginTop={1}>
+            Terminal Code Editor
+          </text>
+          <text fg="#999999" marginTop={1}>
+            Version {pkg.version}
+          </text>
+          <text fg="#666666" marginTop={1}>
+            Press Escape to close
+          </text>
+        </box>
+      </Show>
+    )
+  }
+
   // -- Render --
 
   // Single-file mode: no sidebar, no tabs — just title bar + editor + status bar
@@ -338,13 +413,20 @@ const App = () => {
     return (
       <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
         <TitleBar
-          projectName={basename(SINGLE_FILE!)}
-          activeFileName={basename(SINGLE_FILE!)}
-          isDirty={isCurrentFileDirty()}
+          titlePath={SINGLE_FILE!}
           termWidth={dimensions().width}
           termHeight={dimensions().height}
           onExit={() => renderer.destroy()}
           onSave={saveFile}
+          onUndo={() => {
+            const h = editorHandle()
+            if (h) h.undo()
+          }}
+          onRedo={() => {
+            const h = editorHandle()
+            if (h) h.redo()
+          }}
+          onAbout={() => setShowAbout(true)}
           singleFileMode={true}
         />
 
@@ -369,6 +451,7 @@ const App = () => {
                 setCursorLine(ln)
                 setCursorCol(col)
               }}
+              onHandle={setEditorHandle}
             />
           </ErrorBoundary>
         </box>
@@ -382,6 +465,8 @@ const App = () => {
           cursorCol={cursorCol()}
           isDirty={isCurrentFileDirty()}
         />
+
+        <AboutModal />
       </box>
     )
   }
@@ -390,9 +475,7 @@ const App = () => {
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
       <TitleBar
-        projectName={basename(CWD)}
-        activeFileName={openFile() ? basename(openFile()!) : null}
-        isDirty={isCurrentFileDirty()}
+        titlePath={CWD}
         termWidth={dimensions().width}
         termHeight={dimensions().height}
         onExit={() => renderer.destroy()}
@@ -404,6 +487,15 @@ const App = () => {
         onToggleSidebar={toggleSidebar}
         onNextTab={switchToNextTab}
         onPrevTab={switchToPrevTab}
+        onUndo={() => {
+          const h = editorHandle()
+          if (h) h.undo()
+        }}
+        onRedo={() => {
+          const h = editorHandle()
+          if (h) h.redo()
+        }}
+        onAbout={() => setShowAbout(true)}
       />
 
       {/* Main area: sidebar + resize handle + editor */}
@@ -505,6 +597,7 @@ const App = () => {
                 setCursorLine(ln)
                 setCursorCol(col)
               }}
+              onHandle={setEditorHandle}
             />
           </ErrorBoundary>
         </box>
@@ -519,6 +612,8 @@ const App = () => {
         cursorCol={cursorCol()}
         isDirty={isCurrentFileDirty()}
       />
+
+      <AboutModal />
     </box>
   )
 }

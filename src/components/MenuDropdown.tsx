@@ -1,13 +1,17 @@
 /**
- * Dropdown menu overlay rendered via Portal.
+ * Dropdown menu overlay.
  *
  * Positioned absolutely below the title bar at a given X offset.
  * Each item shows a label + optional shortcut. Separators are
- * rendered as horizontal lines. Escape or click-outside closes.
+ * rendered as horizontal lines. Escape closes the dropdown.
+ *
+ * Uses position="absolute" with zIndex to overlay on top of content.
+ * Rendered inside a parent with overflow="visible" so it escapes
+ * the 1-row title bar height constraint.
  */
 
-import { createSignal, For, Show, onCleanup } from "solid-js"
-import { Portal, useKeyboard, useRenderer } from "@opentui/solid"
+import { createSignal, For, Show } from "solid-js"
+import { useKeyboard } from "@opentui/solid"
 
 export interface MenuItem {
   label: string
@@ -24,13 +28,16 @@ interface MenuDropdownProps {
   open: boolean
   /** Called when the dropdown should close */
   onClose: () => void
+  /** Terminal width (needed for backdrop since % is relative to 1-row parent) */
+  termWidth: number
+  /** Terminal height */
+  termHeight: number
 }
 
 /** Minimum dropdown width (chars) */
 const MIN_WIDTH = 24
 
 const MenuDropdown = (props: MenuDropdownProps) => {
-  const renderer = useRenderer()
   const [hovered, setHovered] = createSignal(-1)
 
   // Compute dropdown width based on longest item
@@ -54,75 +61,74 @@ const MenuDropdown = (props: MenuDropdownProps) => {
 
   return (
     <Show when={props.open}>
-      <Portal mount={renderer.root}>
-        {/* Invisible full-screen backdrop to catch clicks outside */}
-        <box
-          position="absolute"
-          left={0}
-          top={0}
-          width="100%"
-          height="100%"
-          zIndex={9}
-          onMouseDown={() => props.onClose()}
-        />
-
-        {/* Dropdown panel */}
-        <box
-          position="absolute"
-          left={props.left}
-          top={1}
-          width={dropdownWidth()}
-          zIndex={10}
-          flexDirection="column"
-          backgroundColor="#252526"
-          border
-          borderStyle="rounded"
-          borderColor="#454545"
-        >
-          <For each={props.items}>
-            {(item, i) => {
-              if (item.separator) {
-                return (
-                  <text fg="#454545" wrapMode="none">
-                    {"─".repeat(dropdownWidth() - 2)}
-                  </text>
-                )
-              }
-
-              const isHovered = () => i() === hovered()
-              const fg = () => (isHovered() ? "#ffffff" : "#cccccc")
-              const bg = () => (isHovered() ? "#094771" : "#252526")
-
-              const padded = () => {
-                const w = dropdownWidth() - 2
-                if (item.shortcut) {
-                  const gap = w - item.label.length - item.shortcut.length
-                  return " " + item.label + " ".repeat(Math.max(1, gap)) + item.shortcut
-                }
-                return " " + item.label + " ".repeat(Math.max(0, w - item.label.length - 1))
-              }
-
+      {/* Full-screen invisible backdrop — catches clicks outside the dropdown */}
+      <box
+        position="absolute"
+        left={0}
+        top={0}
+        width={props.termWidth}
+        height={props.termHeight}
+        zIndex={99}
+        onMouseDown={() => props.onClose()}
+      />
+      {/* Dropdown panel */}
+      <box
+        position="absolute"
+        left={props.left}
+        top={1}
+        width={dropdownWidth()}
+        zIndex={100}
+        flexDirection="column"
+        backgroundColor="#252526"
+        border
+        borderStyle="single"
+        borderColor="#454545"
+        onMouseOut={() => setHovered(-1)}
+      >
+        <For each={props.items}>
+          {(item, i) => {
+            if (item.separator) {
               return (
-                <text
-                  fg={fg()}
-                  bg={bg()}
-                  wrapMode="none"
-                  onMouseOver={() => setHovered(i())}
-                  onMouseOut={() => {
-                    if (hovered() === i()) setHovered(-1)
-                  }}
-                  onMouseDown={() => {
-                    if (item.action) item.action()
-                    props.onClose()
-                  }}
-                >
-                  {padded()}
+                <text fg="#454545" wrapMode="none">
+                  {"─".repeat(dropdownWidth() - 2)}
                 </text>
               )
-            }}
-          </For>
-        </box>
-      </Portal>
+            }
+
+            const isHovered = () => i() === hovered()
+            const fg = () => (isHovered() ? "#ffffff" : "#cccccc")
+            const bg = () => (isHovered() ? "#094771" : "#252526")
+
+            const padded = () => {
+              const w = dropdownWidth() - 2
+              if (item.shortcut) {
+                const gap = w - item.label.length - item.shortcut.length
+                return " " + item.label + " ".repeat(Math.max(1, gap)) + item.shortcut
+              }
+              return " " + item.label + " ".repeat(Math.max(0, w - item.label.length - 1))
+            }
+
+            return (
+              <text
+                fg={fg()}
+                bg={bg()}
+                wrapMode="none"
+                onMouseOver={() => setHovered(i())}
+                onMouseOut={() => {
+                  if (hovered() === i()) setHovered(-1)
+                }}
+                onMouseDown={() => {
+                  if (item.action) item.action()
+                  setHovered(-1)
+                  props.onClose()
+                }}
+              >
+                {padded()}
+              </text>
+            )
+          }}
+        </For>
+      </box>
     </Show>
   )
 }

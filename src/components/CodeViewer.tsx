@@ -23,8 +23,14 @@ import { useCursor } from "../hooks/useCursor"
 import { useEditing } from "../hooks/useEditing"
 import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
-import { useHistory } from "../hooks/useHistory"
+import { useHistory, type EditType } from "../hooks/useHistory"
+import { log } from "../lib/logger"
 import CursorChar from "./CursorChar"
+
+export interface CodeViewerHandle {
+  undo: () => void
+  redo: () => void
+}
 
 interface CodeViewerProps {
   filePath: string | null
@@ -36,6 +42,8 @@ interface CodeViewerProps {
   codeStartX: number
   onContentChange?: (newContent: string) => void
   onCursorChange?: (line: number, col: number) => void
+  /** Callback to expose imperative handle (undo/redo) */
+  onHandle?: (handle: CodeViewerHandle) => void
 }
 
 const DEFAULT_FG = "#d4d4d4"
@@ -102,16 +110,21 @@ const CodeViewer = (props: CodeViewerProps) => {
    * We read props.content which will reflect the new value on next tick,
    * but cursor row/col are already set synchronously by useEditing.
    */
-  const pushHistory = () => {
-    if (isUndoRedo) return
+  const pushHistory = (editType: EditType = "char") => {
+    if (isUndoRedo) {
+      log.editor.debug("pushHistory skipped (isUndoRedo=true)")
+      return
+    }
     // Schedule push on next microtask so props.content has the new value
     queueMicrotask(() => {
-      history.push(props.content, cursor.cursorRow(), cursor.cursorCol())
+      log.editor.debug({ contentLen: props.content.length, type: editType }, "pushHistory")
+      history.push(props.content, cursor.cursorRow(), cursor.cursorCol(), editType)
     })
   }
 
   /** Apply an undo/redo snapshot: restore content + cursor. */
   const applySnapshot = (entry: { content: string; cursorRow: number; cursorCol: number }) => {
+    log.editor.info({ contentLen: entry.content.length, row: entry.cursorRow, col: entry.cursorCol }, "applySnapshot")
     isUndoRedo = true
     if (props.onContentChange) props.onContentChange(entry.content)
     cursor.setCursorRow(entry.cursorRow)
@@ -121,6 +134,22 @@ const CodeViewer = (props: CodeViewerProps) => {
       scroll.scrollToCursor()
     }, 10)
   }
+
+  // Expose undo/redo to parent via handle callback (reactive so it re-fires on remount)
+  createEffect(() => {
+    if (props.onHandle) {
+      props.onHandle({
+        undo: () => {
+          const e = history.undo()
+          if (e) applySnapshot(e)
+        },
+        redo: () => {
+          const e = history.redo()
+          if (e) applySnapshot(e)
+        },
+      })
+    }
+  })
 
   // -- File change: reset cursor + scroll + history --
 
@@ -252,43 +281,53 @@ const CodeViewer = (props: CodeViewerProps) => {
 
     // Undo: Ctrl+Z
     if (key.ctrl && !key.shift && key.name === "z") {
+      log.editor.info("Ctrl+Z pressed")
       const entry = history.undo()
-      if (entry) applySnapshot(entry)
+      if (entry) {
+        applySnapshot(entry)
+      } else {
+        log.editor.warn("Ctrl+Z → nothing to undo")
+      }
       return
     }
 
     // Redo: Ctrl+Y or Ctrl+Shift+Z
     if ((key.ctrl && key.name === "y") || (key.ctrl && key.shift && key.name === "z")) {
+      log.editor.info("Ctrl+Y/Ctrl+Shift+Z pressed")
       const entry = history.redo()
-      if (entry) applySnapshot(entry)
+      if (entry) {
+        applySnapshot(entry)
+      } else {
+        log.editor.warn("Redo → nothing to redo")
+      }
       return
     }
 
     // Editing
     if (key.name === "return") {
       editing.insertReturn()
-      pushHistory()
+      pushHistory("return")
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "backspace") {
       editing.insertBackspace()
-      pushHistory()
+      pushHistory("backspace")
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "delete") {
       editing.insertDelete()
-      pushHistory()
+      pushHistory("delete")
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "tab") {
       editing.insertTab()
-      pushHistory()
+      pushHistory("tab")
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
@@ -296,7 +335,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     // Character input
     if (key.sequence && key.sequence.length === 1 && key.sequence >= " " && !key.ctrl && !key.meta) {
       editing.insertChar(key.sequence)
-      pushHistory()
+      pushHistory(key.sequence === " " ? "space" : "char")
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
@@ -309,7 +348,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     const pastedText = typeof event === "string" ? event : (event.text ?? String(event))
     if (!pastedText) return
     editing.insertPaste(pastedText)
-    pushHistory()
+    pushHistory("paste")
     cursor.resetBlink()
     setTimeout(scroll.scrollToCursor, 10)
   })
