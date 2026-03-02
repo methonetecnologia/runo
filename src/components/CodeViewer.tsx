@@ -10,19 +10,20 @@
  *
  * Logic is split across extracted hooks:
  *   - useCursor: cursor state, blink, click-to-position
- *   - useEditing: character input, backspace, delete, enter, tab
+ *   - useEditing: character input, backspace, delete, enter, tab, paste
  *   - useScrollSync: gutter↔code scroll sync, scrollbox patching
  *   - useHighlight: Shiki syntax highlighting with debounce
  */
 
 import { createMemo, createEffect, Show, For } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, usePaste } from "@opentui/solid"
 import { splitLines, gutterWidth, maxLineLength, expandTabs } from "../lib/files"
 import { type ColorToken } from "../lib/highlighter"
 import { useCursor } from "../hooks/useCursor"
 import { useEditing } from "../hooks/useEditing"
 import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
+import { useHistory } from "../hooks/useHistory"
 import CursorChar from "./CursorChar"
 
 interface CodeViewerProps {
@@ -90,11 +91,48 @@ const CodeViewer = (props: CodeViewerProps) => {
     lineCount: () => lines().length,
   })
 
-  // -- File change: reset cursor + scroll --
+  const history = useHistory()
+
+  /** Track whether we're applying an undo/redo to skip re-pushing to history. */
+  let isUndoRedo = false
+
+  /**
+   * Push current state to history (call after every edit).
+   * Must be called after the edit is applied, so cursor is already updated.
+   * We read props.content which will reflect the new value on next tick,
+   * but cursor row/col are already set synchronously by useEditing.
+   */
+  const pushHistory = () => {
+    if (isUndoRedo) return
+    // Schedule push on next microtask so props.content has the new value
+    queueMicrotask(() => {
+      history.push(props.content, cursor.cursorRow(), cursor.cursorCol())
+    })
+  }
+
+  /** Apply an undo/redo snapshot: restore content + cursor. */
+  const applySnapshot = (entry: { content: string; cursorRow: number; cursorCol: number }) => {
+    isUndoRedo = true
+    if (props.onContentChange) props.onContentChange(entry.content)
+    cursor.setCursorRow(entry.cursorRow)
+    cursor.setCursorCol(entry.cursorCol)
+    setTimeout(() => {
+      isUndoRedo = false
+      scroll.scrollToCursor()
+    }, 10)
+  }
+
+  // -- File change: reset cursor + scroll + history --
+
+  /** Track current filePath to detect actual file switches (not content edits). */
+  let lastFilePath: string | null = null
 
   createEffect(() => {
-    props.filePath
+    const fp = props.filePath
+    if (fp === lastFilePath) return
+    lastFilePath = fp
     cursor.resetCursor()
+    history.reset(props.content, 0, 0)
     if (codeScrollRef) {
       codeScrollRef.scrollTop = 0
       codeScrollRef.scrollLeft = 0
@@ -212,27 +250,45 @@ const CodeViewer = (props: CodeViewerProps) => {
       return
     }
 
+    // Undo: Ctrl+Z
+    if (key.ctrl && !key.shift && key.name === "z") {
+      const entry = history.undo()
+      if (entry) applySnapshot(entry)
+      return
+    }
+
+    // Redo: Ctrl+Y or Ctrl+Shift+Z
+    if ((key.ctrl && key.name === "y") || (key.ctrl && key.shift && key.name === "z")) {
+      const entry = history.redo()
+      if (entry) applySnapshot(entry)
+      return
+    }
+
     // Editing
     if (key.name === "return") {
       editing.insertReturn()
+      pushHistory()
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "backspace") {
       editing.insertBackspace()
+      pushHistory()
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "delete") {
       editing.insertDelete()
+      pushHistory()
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
 
     if (key.name === "tab") {
       editing.insertTab()
+      pushHistory()
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
@@ -240,9 +296,22 @@ const CodeViewer = (props: CodeViewerProps) => {
     // Character input
     if (key.sequence && key.sequence.length === 1 && key.sequence >= " " && !key.ctrl && !key.meta) {
       editing.insertChar(key.sequence)
+      pushHistory()
       setTimeout(scroll.scrollToCursor, 10)
       return
     }
+  })
+
+  // -- Paste handling --
+
+  usePaste((event) => {
+    if (!props.focused || !props.filePath) return
+    const pastedText = typeof event === "string" ? event : (event.text ?? String(event))
+    if (!pastedText) return
+    editing.insertPaste(pastedText)
+    pushHistory()
+    cursor.resetBlink()
+    setTimeout(scroll.scrollToCursor, 10)
   })
 
   // =====================================================================
