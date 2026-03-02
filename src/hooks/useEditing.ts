@@ -122,6 +122,58 @@ export function useEditing(opts: UseEditingOptions) {
     }
   }
 
+  /**
+   * Delete a range of text (for selection deletion).
+   * Places cursor at the start of the deleted range.
+   */
+  const deleteRange = (startRow: number, startCol: number, endRow: number, endCol: number) => {
+    const ls = opts.lines()
+    const newLines = [...ls]
+
+    if (startRow === endRow) {
+      const line = newLines[startRow] || ""
+      newLines[startRow] = line.slice(0, startCol) + line.slice(endCol)
+    } else {
+      const firstLine = newLines[startRow] || ""
+      const lastLine = newLines[endRow] || ""
+      newLines[startRow] = firstLine.slice(0, startCol) + lastLine.slice(endCol)
+      newLines.splice(startRow + 1, endRow - startRow)
+    }
+
+    applyEdit(newLines, startRow, startCol)
+  }
+
+  /**
+   * Replace a range of text with new content (for typing/pasting over selection).
+   */
+  const replaceRange = (startRow: number, startCol: number, endRow: number, endCol: number, text: string) => {
+    const ls = opts.lines()
+    const newLines = [...ls]
+
+    const firstLine = newLines[startRow] || ""
+    const lastLine = newLines[endRow] || ""
+    const before = firstLine.slice(0, startCol)
+    const after = lastLine.slice(endCol)
+
+    // Remove selected lines
+    newLines.splice(startRow, endRow - startRow + 1)
+
+    // Insert replacement
+    const insertLines = text.split("\n")
+    if (insertLines.length === 1) {
+      newLines.splice(startRow, 0, before + insertLines[0] + after)
+      applyEdit(newLines, startRow, startCol + insertLines[0].length)
+    } else {
+      const first = before + insertLines[0]
+      const last = insertLines[insertLines.length - 1] + after
+      const middle = insertLines.slice(1, -1)
+      newLines.splice(startRow, 0, first, ...middle, last)
+      const finalRow = startRow + insertLines.length - 1
+      const finalCol = insertLines[insertLines.length - 1].length
+      applyEdit(newLines, finalRow, finalCol)
+    }
+  }
+
   return {
     applyEdit,
     insertReturn,
@@ -130,5 +182,7 @@ export function useEditing(opts: UseEditingOptions) {
     insertTab,
     insertChar,
     insertPaste,
+    deleteRange,
+    replaceRange,
   }
 }

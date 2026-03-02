@@ -15,8 +15,8 @@
  *   - useHighlight: Shiki syntax highlighting with debounce
  */
 
-import { createMemo, createEffect, Show, For } from "solid-js"
-import { useKeyboard, usePaste } from "@opentui/solid"
+import { createMemo, createEffect, onCleanup, Show, For, batch } from "solid-js"
+import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
 import { splitLines, gutterWidth, maxLineLength, expandTabs } from "../lib/files"
 import { type ColorToken } from "../lib/highlighter"
 import { useCursor } from "../hooks/useCursor"
@@ -24,6 +24,7 @@ import { useEditing } from "../hooks/useEditing"
 import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
 import { useHistory, type EditType } from "../hooks/useHistory"
+import { useSelection, type SelectionRange } from "../hooks/useSelection"
 import { log } from "../lib/logger"
 import CursorChar from "./CursorChar"
 
@@ -40,6 +41,8 @@ interface CodeViewerProps {
   availableHeight: number
   /** Absolute X column where code text starts in the terminal */
   codeStartX: number
+  /** Absolute Y row where the code area starts in the terminal */
+  codeStartY: number
   onContentChange?: (newContent: string) => void
   onCursorChange?: (line: number, col: number) => void
   /** Callback to expose imperative handle (undo/redo) */
@@ -47,10 +50,12 @@ interface CodeViewerProps {
 }
 
 const DEFAULT_FG = "#d4d4d4"
+const SELECTION_BG = "#264f78"
 
 /** Render token for a single segment of a line. */
 interface RenderToken extends ColorToken {
   cursor?: boolean
+  selected?: boolean
 }
 
 const CodeViewer = (props: CodeViewerProps) => {
@@ -101,6 +106,13 @@ const CodeViewer = (props: CodeViewerProps) => {
     filePath: () => props.filePath,
     lineCount: () => lines().length,
   })
+
+  const selection = useSelection()
+  const renderer = useRenderer()
+
+  // Cache selection range as a single memo so individual line memos
+  // only depend on this one signal instead of anchor()+head() separately.
+  const selRange = createMemo(() => selection.getRange())
 
   const history = useHistory()
 
@@ -154,6 +166,28 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
   })
 
+  // -- Selection helpers --
+
+  /** Delete the current selection and return true, or return false if no selection. */
+  const deleteSelectionIfActive = (): boolean => {
+    const range = selection.getRange()
+    if (!range) return false
+    editing.deleteRange(range.start.row, range.start.col, range.end.row, range.end.col)
+    selection.clearSelection()
+    return true
+  }
+
+  /** Get selected text for copy/cut */
+  const getSelectedText = (): string => {
+    return selection.getSelectedText(lines())
+  }
+
+  // -- Mouse drag state --
+  let isDragging = false
+  let isGutterDragging = false
+  /** The line where the gutter click started (for multi-line gutter selection). */
+  let gutterAnchorRow = 0
+
   // -- File change: reset cursor + scroll + history --
 
   /** Track current filePath to detect actual file switches (not content edits). */
@@ -164,6 +198,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (fp === lastFilePath) return
     lastFilePath = fp
     cursor.resetCursor()
+    selection.clearSelection()
     history.reset(props.content, 0, 0)
     if (codeScrollRef) {
       codeScrollRef.scrollTop = 0
@@ -174,7 +209,180 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
   })
 
+  // -- Mouse drag handling --
+  // We intercept raw stdin mouse data via renderer.addInputHandler because
+  // the scrollbox blocks native selection (selectable=false) which prevents
+  // the OpenTUI captured-renderable drag flow from working on child elements.
+
+  /** Compute document (row, col) from global mouse terminal coordinates. */
+  const globalMouseToPos = (globalX: number, globalY: number) => {
+    const codeRef = codeScrollRef
+    if (!codeRef) return { row: 0, col: 0 }
+
+    const scrollTop = codeRef.scrollTop || 0
+    const scrollLeft = codeRef.scrollLeft || 0
+    const relY = globalY - props.codeStartY + scrollTop
+    const row = Math.max(0, Math.min(Math.floor(relY), lines().length - 1))
+
+    const localExpandedCol = globalX - props.codeStartX + scrollLeft
+    const rawLine = lines()[row] || ""
+    let expanded = 0
+    let col = rawLine.length
+    for (let i = 0; i < rawLine.length; i++) {
+      if (rawLine[i] === "\t") expanded += 4
+      else expanded += 1
+      if (expanded > Math.max(0, localExpandedCol)) {
+        col = i
+        break
+      }
+    }
+    return { row, col }
+  }
+
+  // Intercept ONLY drag mouse events by replacing the stdinListener.
+  // mouseDown and mouseUp are NOT consumed — OpenTUI handles them normally
+  // (focus, hover, etc). We just read them to track isDragging state.
+  // Only drag events during an active selection are consumed.
+
+  const rAny = renderer as any
+  const origStdinListener = rAny.stdinListener
+  const SGR_MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g
+
+  const wrappedStdinListener = (data: Buffer) => {
+    if (!rAny._useMouse || !props.focused) {
+      origStdinListener(data)
+      return
+    }
+
+    const str = data.toString()
+    if (str.indexOf("\x1b[<") === -1) {
+      origStdinListener(data)
+      return
+    }
+
+    // Scan for drag events we need to consume
+    const consumed: Set<number> = new Set()
+    SGR_MOUSE_RE.lastIndex = 0
+    let match
+    while ((match = SGR_MOUSE_RE.exec(str)) !== null) {
+      const btn = parseInt(match[1], 10)
+      const x = parseInt(match[2], 10) - 1
+      const y = parseInt(match[3], 10) - 1
+      const release = match[4] === "m"
+
+      const isLeftDrag = (btn & 0x03) === 0 && (btn & 32) !== 0 && !release
+      const isLeftRelease = (btn & 0x03) === 0 && release
+
+      if ((isDragging || isGutterDragging) && isLeftDrag) {
+        if (isGutterDragging) {
+          // Gutter drag: extend selection by full lines
+          const relY = y - props.codeStartY + (codeScrollRef?.scrollTop || 0)
+          const dragRow = Math.max(0, Math.min(Math.floor(relY), lines().length - 1))
+          const ls = lines()
+
+          if (dragRow >= gutterAnchorRow) {
+            // Dragging downward: select from start of anchor line to end of drag line
+            selection.startSelection(gutterAnchorRow, 0)
+            if (dragRow + 1 < ls.length) {
+              selection.extendSelection(dragRow + 1, 0)
+            } else {
+              selection.extendSelection(dragRow, ls[dragRow]?.length ?? 0)
+            }
+            batch(() => {
+              cursor.setCursorRow(dragRow)
+              cursor.setCursorCol(ls[dragRow]?.length ?? 0)
+            })
+          } else {
+            // Dragging upward: select from end of anchor line to start of drag line
+            if (gutterAnchorRow + 1 < ls.length) {
+              selection.startSelection(gutterAnchorRow + 1, 0)
+            } else {
+              selection.startSelection(gutterAnchorRow, ls[gutterAnchorRow]?.length ?? 0)
+            }
+            selection.extendSelection(dragRow, 0)
+            batch(() => {
+              cursor.setCursorRow(dragRow)
+              cursor.setCursorCol(0)
+            })
+          }
+        } else {
+          // Code area drag: extend selection by character position
+          const pos = globalMouseToPos(x, y)
+          batch(() => {
+            cursor.setCursorRow(pos.row)
+            cursor.setCursorCol(pos.col)
+          })
+          selection.extendSelection(pos.row, pos.col)
+        }
+        cursor.resetBlink()
+        consumed.add(match.index)
+      } else if ((isDragging || isGutterDragging) && isLeftRelease) {
+        isDragging = false
+        isGutterDragging = false
+        if (!selection.hasSelection()) {
+          selection.clearSelection()
+        }
+      }
+    }
+
+    if (consumed.size === 0) {
+      origStdinListener(data)
+      return
+    }
+
+    // Strip consumed drag sequences, forward everything else
+    let filtered = ""
+    SGR_MOUSE_RE.lastIndex = 0
+    let lastEnd = 0
+    while ((match = SGR_MOUSE_RE.exec(str)) !== null) {
+      if (consumed.has(match.index)) {
+        filtered += str.slice(lastEnd, match.index)
+        lastEnd = match.index + match[0].length
+      }
+    }
+    filtered += str.slice(lastEnd)
+
+    if (filtered.length > 0) {
+      origStdinListener(Buffer.from(filtered))
+    }
+  }
+
+  rAny.stdin.removeListener("data", origStdinListener)
+  rAny.stdin.on("data", wrappedStdinListener)
+  rAny.stdinListener = wrappedStdinListener
+
+  onCleanup(() => {
+    rAny.stdin.removeListener("data", wrappedStdinListener)
+    rAny.stdin.on("data", origStdinListener)
+    rAny.stdinListener = origStdinListener
+  })
+
   // -- Keyboard --
+
+  /**
+   * Helper: move cursor and optionally extend selection.
+   * If extending, starts selection from current cursor pos if not already active.
+   */
+  const moveCursor = (newRow: number, newCol: number, extending: boolean) => {
+    if (extending) {
+      if (!selection.hasSelection() && !selection.anchor()) {
+        selection.startSelection(cursor.cursorRow(), cursor.cursorCol())
+      }
+    } else {
+      selection.clearSelection()
+    }
+
+    batch(() => {
+      cursor.setCursorRow(newRow)
+      cursor.setCursorCol(newCol)
+    })
+
+    if (extending) {
+      selection.extendSelection(newRow, newCol)
+    }
+
+    scroll.scrollToCursor()
+  }
 
   useKeyboard((key) => {
     if (!props.focused || !props.filePath || isBinary()) return
@@ -185,33 +393,51 @@ const CodeViewer = (props: CodeViewerProps) => {
 
     cursor.resetBlink()
 
-    // Shift+Left/Right = horizontal scroll
-    if (key.shift && !key.ctrl && (key.name === "left" || key.name === "right")) {
-      if (codeScrollRef) {
-        const delta = key.name === "right" ? 3 : -3
-        codeScrollRef.scrollBy({ x: delta, y: 0 })
+    // Ctrl+A = Select all
+    if (key.ctrl && key.name === "a") {
+      const lastRow = ls.length - 1
+      const lastCol = ls[lastRow] ? ls[lastRow].length : 0
+      selection.startSelection(0, 0)
+      selection.extendSelection(lastRow, lastCol)
+      batch(() => {
+        cursor.setCursorRow(lastRow)
+        cursor.setCursorCol(lastCol)
+      })
+      scroll.scrollToCursor()
+      return
+    }
+
+    // Ctrl+C = Copy
+    if (key.ctrl && key.name === "c") {
+      const text = getSelectedText()
+      if (text) {
+        renderer.copyToClipboardOSC52(text)
+        log.editor.info({ len: text.length }, "Copied to clipboard")
       }
       return
     }
 
-    // Shift+Up/Down = vertical scroll (only if content exceeds viewport)
-    if (key.shift && !key.ctrl && (key.name === "up" || key.name === "down")) {
-      if (codeScrollRef && ls.length > props.availableHeight - 1) {
-        const delta = key.name === "down" ? 3 : -3
-        codeScrollRef.scrollBy({ x: 0, y: delta })
-        scroll.syncGutterScroll()
+    // Ctrl+X = Cut
+    if (key.ctrl && key.name === "x") {
+      const text = getSelectedText()
+      if (text) {
+        renderer.copyToClipboardOSC52(text)
+        deleteSelectionIfActive()
+        pushHistory("delete")
+        setTimeout(scroll.scrollToCursor, 10)
+        log.editor.info({ len: text.length }, "Cut to clipboard")
       }
       return
     }
 
-    // Navigation
+    // Navigation with Shift = selection
+    const extending = key.shift && !key.ctrl
+
     if (key.name === "up") {
       if (row > 0) {
         const newRow = row - 1
         const maxCol = ls[newRow] ? ls[newRow].length : 0
-        cursor.setCursorRow(newRow)
-        cursor.setCursorCol(Math.min(col, maxCol))
-        scroll.scrollToCursor()
+        moveCursor(newRow, Math.min(col, maxCol), extending)
       }
       return
     }
@@ -220,45 +446,53 @@ const CodeViewer = (props: CodeViewerProps) => {
       if (row < ls.length - 1) {
         const newRow = row + 1
         const maxCol = ls[newRow] ? ls[newRow].length : 0
-        cursor.setCursorRow(newRow)
-        cursor.setCursorCol(Math.min(col, maxCol))
-        scroll.scrollToCursor()
+        moveCursor(newRow, Math.min(col, maxCol), extending)
       }
       return
     }
 
     if (key.name === "left") {
-      if (col > 0) {
-        cursor.setCursorCol(col - 1)
-      } else if (row > 0) {
-        cursor.setCursorRow(row - 1)
-        cursor.setCursorCol(ls[row - 1] ? ls[row - 1].length : 0)
+      if (!extending && selection.hasSelection()) {
+        // Move to start of selection
+        const range = selection.getRange()
+        if (range) {
+          moveCursor(range.start.row, range.start.col, false)
+          return
+        }
       }
-      scroll.scrollToCursor()
+      if (col > 0) {
+        moveCursor(row, col - 1, extending)
+      } else if (row > 0) {
+        moveCursor(row - 1, ls[row - 1] ? ls[row - 1].length : 0, extending)
+      }
       return
     }
 
     if (key.name === "right") {
+      if (!extending && selection.hasSelection()) {
+        // Move to end of selection
+        const range = selection.getRange()
+        if (range) {
+          moveCursor(range.end.row, range.end.col, false)
+          return
+        }
+      }
       const lineLen = ls[row] ? ls[row].length : 0
       if (col < lineLen) {
-        cursor.setCursorCol(col + 1)
+        moveCursor(row, col + 1, extending)
       } else if (row < ls.length - 1) {
-        cursor.setCursorRow(row + 1)
-        cursor.setCursorCol(0)
+        moveCursor(row + 1, 0, extending)
       }
-      scroll.scrollToCursor()
       return
     }
 
     if (key.name === "home") {
-      cursor.setCursorCol(0)
-      scroll.scrollToCursor()
+      moveCursor(row, 0, extending)
       return
     }
 
     if (key.name === "end") {
-      cursor.setCursorCol(ls[row] ? ls[row].length : 0)
-      scroll.scrollToCursor()
+      moveCursor(row, ls[row] ? ls[row].length : 0, extending)
       return
     }
 
@@ -266,9 +500,7 @@ const CodeViewer = (props: CodeViewerProps) => {
       const pageSize = Math.max(1, props.availableHeight - 2)
       const newRow = Math.max(0, row - pageSize)
       const maxCol = ls[newRow] ? ls[newRow].length : 0
-      cursor.setCursorRow(newRow)
-      cursor.setCursorCol(Math.min(col, maxCol))
-      scroll.scrollToCursor()
+      moveCursor(newRow, Math.min(col, maxCol), extending)
       return
     }
 
@@ -276,15 +508,14 @@ const CodeViewer = (props: CodeViewerProps) => {
       const pageSize = Math.max(1, props.availableHeight - 2)
       const newRow = Math.min(ls.length - 1, row + pageSize)
       const maxCol = ls[newRow] ? ls[newRow].length : 0
-      cursor.setCursorRow(newRow)
-      cursor.setCursorCol(Math.min(col, maxCol))
-      scroll.scrollToCursor()
+      moveCursor(newRow, Math.min(col, maxCol), extending)
       return
     }
 
     // Undo: Ctrl+Z
     if (key.ctrl && !key.shift && key.name === "z") {
       log.editor.info("Ctrl+Z pressed")
+      selection.clearSelection()
       const entry = history.undo()
       if (entry) {
         applySnapshot(entry)
@@ -297,6 +528,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     // Redo: Ctrl+Y or Ctrl+Shift+Z
     if ((key.ctrl && key.name === "y") || (key.ctrl && key.shift && key.name === "z")) {
       log.editor.info("Ctrl+Y/Ctrl+Shift+Z pressed")
+      selection.clearSelection()
       const entry = history.redo()
       if (entry) {
         applySnapshot(entry)
@@ -306,8 +538,10 @@ const CodeViewer = (props: CodeViewerProps) => {
       return
     }
 
-    // Editing
+    // Editing — all selection-aware
+
     if (key.name === "return") {
+      deleteSelectionIfActive()
       editing.insertReturn()
       pushHistory("return")
       setTimeout(scroll.scrollToCursor, 10)
@@ -315,6 +549,11 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
 
     if (key.name === "backspace") {
+      if (deleteSelectionIfActive()) {
+        pushHistory("backspace")
+        setTimeout(scroll.scrollToCursor, 10)
+        return
+      }
       editing.insertBackspace()
       pushHistory("backspace")
       setTimeout(scroll.scrollToCursor, 10)
@@ -322,6 +561,11 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
 
     if (key.name === "delete") {
+      if (deleteSelectionIfActive()) {
+        pushHistory("delete")
+        setTimeout(scroll.scrollToCursor, 10)
+        return
+      }
       editing.insertDelete()
       pushHistory("delete")
       setTimeout(scroll.scrollToCursor, 10)
@@ -329,6 +573,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     }
 
     if (key.name === "tab") {
+      deleteSelectionIfActive()
       editing.insertTab()
       pushHistory("tab")
       setTimeout(scroll.scrollToCursor, 10)
@@ -337,7 +582,13 @@ const CodeViewer = (props: CodeViewerProps) => {
 
     // Character input
     if (key.sequence && key.sequence.length === 1 && key.sequence >= " " && !key.ctrl && !key.meta) {
-      editing.insertChar(key.sequence)
+      if (selection.hasSelection()) {
+        const range = selection.getRange()!
+        selection.clearSelection()
+        editing.replaceRange(range.start.row, range.start.col, range.end.row, range.end.col, key.sequence)
+      } else {
+        editing.insertChar(key.sequence)
+      }
       pushHistory(key.sequence === " " ? "space" : "char")
       setTimeout(scroll.scrollToCursor, 10)
       return
@@ -350,7 +601,14 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (!props.focused || !props.filePath || isBinary()) return
     const pastedText = typeof event === "string" ? event : (event.text ?? String(event))
     if (!pastedText) return
-    editing.insertPaste(pastedText)
+
+    if (selection.hasSelection()) {
+      const range = selection.getRange()!
+      selection.clearSelection()
+      editing.replaceRange(range.start.row, range.start.col, range.end.row, range.end.col, pastedText)
+    } else {
+      editing.insertPaste(pastedText)
+    }
     pushHistory("paste")
     cursor.resetBlink()
     setTimeout(scroll.scrollToCursor, 10)
@@ -421,23 +679,109 @@ const CodeViewer = (props: CodeViewerProps) => {
     return { before, cursorToken, after }
   }
 
-  const buildLineTokens = (lineIndex: number, rawLine: string, active: boolean, col: number): RenderToken[] => {
-    const tokens = getLineTokens(lineIndex, rawLine)
-    if (!active) return tokens
+  /**
+   * Apply selection highlighting to a list of tokens on a given line.
+   * Splits tokens at selection boundaries and marks selected portions.
+   */
+  const applySelectionToTokens = (
+    tokens: RenderToken[],
+    lineIndex: number,
+    rawLine: string,
+    selRange: SelectionRange
+  ): RenderToken[] => {
+    // Determine the expanded-col range of selection on this line
+    let selStartExpCol: number
+    let selEndExpCol: number
 
-    const cursorExpPos = expandTabs(rawLine.slice(0, col)).length
-    const cursorChLen = col < rawLine.length ? expandTabs(rawLine[col]).length : 1
-    const { before, cursorToken, after } = splitTokensAtCursor(tokens, cursorExpPos, cursorChLen)
+    if (lineIndex < selRange.start.row || lineIndex > selRange.end.row) {
+      return tokens
+    }
+
+    if (lineIndex === selRange.start.row) {
+      selStartExpCol = expandTabs(rawLine.slice(0, selRange.start.col)).length
+    } else {
+      selStartExpCol = 0
+    }
+
+    if (lineIndex === selRange.end.row) {
+      selEndExpCol = expandTabs(rawLine.slice(0, selRange.end.col)).length
+    } else {
+      // Select the entire line including a trailing "virtual" character for newline
+      selEndExpCol = expandTabs(rawLine).length + 1
+    }
+
+    if (selStartExpCol >= selEndExpCol) return tokens
 
     const result: RenderToken[] = []
-    for (const t of before) result.push(t)
-    result.push({ ...cursorToken, cursor: true })
-    for (const t of after) result.push(t)
+    let pos = 0
 
-    if (after.length === 0 && cursorToken.content !== " ") {
-      result.push({ content: " ", color: DEFAULT_FG })
+    for (const t of tokens) {
+      const tEnd = pos + t.content.length
+
+      if (tEnd <= selStartExpCol || pos >= selEndExpCol) {
+        // Entirely outside selection
+        result.push(t)
+      } else if (pos >= selStartExpCol && tEnd <= selEndExpCol) {
+        // Entirely inside selection
+        result.push({ ...t, selected: true })
+      } else {
+        // Partially selected — split the token
+        if (pos < selStartExpCol) {
+          result.push({ content: t.content.slice(0, selStartExpCol - pos), color: t.color, cursor: t.cursor })
+        }
+        const sliceStart = Math.max(0, selStartExpCol - pos)
+        const sliceEnd = Math.min(t.content.length, selEndExpCol - pos)
+        result.push({
+          content: t.content.slice(sliceStart, sliceEnd),
+          color: t.color,
+          selected: true,
+          cursor: t.cursor,
+        })
+        if (tEnd > selEndExpCol) {
+          result.push({ content: t.content.slice(selEndExpCol - pos), color: t.color })
+        }
+      }
+      pos = tEnd
     }
+
+    // If selection extends past end of line (trailing virtual char), add selected space
+    if (selEndExpCol > pos && lineIndex !== selRange.end.row) {
+      result.push({ content: " ", color: DEFAULT_FG, selected: true })
+    }
+
     return result
+  }
+
+  const buildLineTokens = (
+    lineIndex: number,
+    rawLine: string,
+    active: boolean,
+    col: number,
+    selRange: SelectionRange | null
+  ): RenderToken[] => {
+    let tokens: RenderToken[] = getLineTokens(lineIndex, rawLine)
+
+    if (active) {
+      const cursorExpPos = expandTabs(rawLine.slice(0, col)).length
+      const cursorChLen = col < rawLine.length ? expandTabs(rawLine[col]).length : 1
+      const { before, cursorToken, after } = splitTokensAtCursor(tokens, cursorExpPos, cursorChLen)
+
+      tokens = []
+      for (const t of before) tokens.push(t)
+      tokens.push({ ...cursorToken, cursor: true })
+      for (const t of after) tokens.push(t)
+
+      if (after.length === 0 && cursorToken.content !== " ") {
+        tokens.push({ content: " ", color: DEFAULT_FG })
+      }
+    }
+
+    // Apply selection highlighting
+    if (selRange) {
+      tokens = applySelectionToTokens(tokens, lineIndex, rawLine, selRange)
+    }
+
+    return tokens
   }
 
   // -- Render --
@@ -486,6 +830,27 @@ const CodeViewer = (props: CodeViewerProps) => {
                       fg={isCurrentLine() ? "#c6c6c6" : "#858585"}
                       bg={isCurrentLine() ? "#2a2d2e" : "#1e1e1e"}
                       wrapMode="none"
+                      onMouseDown={() => {
+                        const row = i()
+                        const ls = lines()
+
+                        // Select the entire line
+                        gutterAnchorRow = row
+                        isGutterDragging = true
+
+                        const endCol = ls[row]?.length ?? 0
+                        selection.startSelection(row, 0)
+                        if (row + 1 < ls.length) {
+                          selection.extendSelection(row + 1, 0)
+                        } else {
+                          selection.extendSelection(row, endCol)
+                        }
+                        batch(() => {
+                          cursor.setCursorRow(row)
+                          cursor.setCursorCol(endCol)
+                        })
+                        cursor.resetBlink()
+                      }}
                     >
                       {num()}
                     </text>
@@ -514,7 +879,11 @@ const CodeViewer = (props: CodeViewerProps) => {
                     const raw = lines()[i()] || ""
                     const active = isActive()
                     const col = active ? cursor.cursorCol() : 0
-                    return buildLineTokens(i(), raw, active, col)
+                    // Only read selRange when this line is actually in selection range,
+                    // reducing unnecessary recalculation for lines outside the selection.
+                    const sr = selRange()
+                    const lineSelRange = sr && i() >= sr.start.row && i() <= sr.end.row ? sr : null
+                    return buildLineTokens(i(), raw, active, col, lineSelRange)
                   })
 
                   const activeBg = createMemo(() => lineBg())
@@ -524,14 +893,38 @@ const CodeViewer = (props: CodeViewerProps) => {
                       flexDirection="row"
                       width="100%"
                       backgroundColor={lineBg()}
-                      onMouseDown={(e: any) => cursor.handleLineClick(i(), e)}
+                      onMouseDown={(e: any) => {
+                        const shift = e?.modifiers?.shift ?? false
+                        const pos = cursor.mouseToPos(i(), e)
+
+                        if (shift) {
+                          if (!selection.anchor()) {
+                            selection.startSelection(cursor.cursorRow(), cursor.cursorCol())
+                          }
+                          batch(() => {
+                            cursor.setCursorRow(pos.row)
+                            cursor.setCursorCol(pos.col)
+                          })
+                          selection.extendSelection(pos.row, pos.col)
+                        } else {
+                          selection.clearSelection()
+                          cursor.handleLineClick(i(), e)
+                          isDragging = true
+                          selection.startSelection(pos.row, pos.col)
+                        }
+                        cursor.resetBlink()
+                      }}
                     >
                       <For each={renderTokens()}>
                         {(token: RenderToken) =>
                           token.cursor ? (
-                            <CursorChar token={token} bg={activeBg()} cursorVisible={cursor.cursorVisible} />
+                            <CursorChar
+                              token={token}
+                              bg={token.selected ? SELECTION_BG : activeBg()}
+                              cursorVisible={cursor.cursorVisible}
+                            />
                           ) : (
-                            <text fg={token.color} bg={lineBg()} wrapMode="none">
+                            <text fg={token.color} bg={token.selected ? SELECTION_BG : lineBg()} wrapMode="none">
                               {token.content}
                             </text>
                           )

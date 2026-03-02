@@ -11,3 +11,6 @@ runo-*
 # Shiki/tree-sitter build artifacts
 *.wasm
 *.scm
+
+# Agent instructions (local only)
+AGENTS.md

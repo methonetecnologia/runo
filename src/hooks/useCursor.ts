@@ -72,21 +72,25 @@ export function useCursor(opts: UseCursorOptions) {
     return rawLine.length
   }
 
-  const handleLineClick = (lineIndex: number, e: any) => {
-    resetBlink()
-    renderer.clearSelection()
-
+  /** Convert a mouse event to a (row, col) position in the document. */
+  const mouseToPos = (lineIndex: number, e: any): { row: number; col: number } => {
     const ls = opts.lines()
     const row = Math.max(0, Math.min(lineIndex, ls.length - 1))
     const rawLine = ls[row] || ""
-
     const globalX = e?.x ?? 0
     const scrollLeft = opts.codeScrollRef()?.scrollLeft || 0
     const localExpandedCol = globalX - opts.codeStartX() + scrollLeft
     const col = expandedColToRawCol(rawLine, Math.max(0, localExpandedCol))
+    return { row, col }
+  }
 
-    setCursorRow(row)
-    setCursorCol(col)
+  const handleLineClick = (lineIndex: number, e: any) => {
+    resetBlink()
+    renderer.clearSelection()
+
+    const pos = mouseToPos(lineIndex, e)
+    setCursorRow(pos.row)
+    setCursorCol(pos.col)
   }
 
   /** Reset cursor to (0,0) — call when switching files */
@@ -105,5 +109,6 @@ export function useCursor(opts: UseCursorOptions) {
     resetBlink,
     resetCursor,
     handleLineClick,
+    mouseToPos,
   }
 }

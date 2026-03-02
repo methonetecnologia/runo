@@ -454,6 +454,7 @@ const App = () => {
               availableWidth={dimensions().width}
               availableHeight={dimensions().height - 2}
               codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
+              codeStartY={1}
               onContentChange={handleContentChange}
               onCursorChange={(ln, col) => {
                 setCursorLine(ln)
@@ -600,6 +601,7 @@ const App = () => {
               availableWidth={dimensions().width - clampedSidebarWidth() - 1}
               availableHeight={dimensions().height - 3}
               codeStartX={clampedSidebarWidth() + 1 + gutterWidth(splitLines(fileContent()).length) + 1}
+              codeStartY={2}
               onContentChange={handleContentChange}
               onCursorChange={(ln, col) => {
                 setCursorLine(ln)

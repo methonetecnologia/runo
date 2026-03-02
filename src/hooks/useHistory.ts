@@ -79,6 +79,19 @@ export function useHistory(): UseHistoryReturn {
     redoStack.push(current)
 
     const target = undoStack[undoStack.length - 1]
+
+    // When reaching the baseline (first entry), use cursor position from
+    // the entry we just popped — baseline cursor is (0,0) from file open
+    // and doesn't reflect where the user actually was.
+    if (undoStack.length === 1) {
+      const result = { content: target.content, cursorRow: current.cursorRow, cursorCol: current.cursorCol }
+      h.info(
+        { contentLen: result.content.length, undo: undoStack.length, redo: redoStack.length },
+        "undo → restoring (baseline)"
+      )
+      return result
+    }
+
     h.info({ contentLen: target.content.length, undo: undoStack.length, redo: redoStack.length }, "undo → restoring")
     return target
   }
