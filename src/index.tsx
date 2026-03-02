@@ -25,6 +25,7 @@ import {
   toggleDirectory,
   gutterWidth,
   splitLines,
+  isBinaryFile,
   type FileEntry,
 } from "./lib/files"
 import FileTree from "./components/FileTree"
@@ -50,6 +51,12 @@ const CWD = process.cwd()
 
 /** If set, IDE opens in single-file mode (no sidebar, no tabs) */
 const SINGLE_FILE = cliOptions.singleFile
+
+/** Block binary files in single-file mode */
+if (SINGLE_FILE && isBinaryFile(SINGLE_FILE)) {
+  console.error(`Error: "${SINGLE_FILE}" is a binary file and cannot be opened in Runo.`)
+  process.exit(1)
+}
 
 /** Sidebar width constraints (in terminal columns) */
 const MIN_SIDEBAR = 15
@@ -141,6 +148,7 @@ const App = () => {
    * - If the file is already open (pinned or preview), just switch to it
    */
   const handleOpenFile = (entry: FileEntry) => {
+    if (entry.isDirectory) return
     log.app.info({ path: entry.path }, "openFile")
     const content = readFileContent(entry.path)
 

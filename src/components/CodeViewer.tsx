@@ -63,6 +63,9 @@ const CodeViewer = (props: CodeViewerProps) => {
   const codeWidth = createMemo(() => Math.max(1, props.availableWidth - gutterW() - 1))
   const maxLineLen = createMemo(() => maxLineLength(lines()))
 
+  /** Whether current content is a binary-file placeholder (read-only) */
+  const isBinary = createMemo(() => props.content.startsWith("[Binary file"))
+
   // -- Hooks --
 
   const cursor = useCursor({
@@ -174,7 +177,7 @@ const CodeViewer = (props: CodeViewerProps) => {
   // -- Keyboard --
 
   useKeyboard((key) => {
-    if (!props.focused || !props.filePath) return
+    if (!props.focused || !props.filePath || isBinary()) return
 
     const ls = lines()
     const row = cursor.cursorRow()
@@ -344,7 +347,7 @@ const CodeViewer = (props: CodeViewerProps) => {
   // -- Paste handling --
 
   usePaste((event) => {
-    if (!props.focused || !props.filePath) return
+    if (!props.focused || !props.filePath || isBinary()) return
     const pastedText = typeof event === "string" ? event : (event.text ?? String(event))
     if (!pastedText) return
     editing.insertPaste(pastedText)
@@ -442,7 +445,7 @@ const CodeViewer = (props: CodeViewerProps) => {
   return (
     <box flexDirection="column" flexGrow={1} height="100%" backgroundColor="#1e1e1e">
       <Show
-        when={props.filePath}
+        when={props.filePath && !isBinary()}
         fallback={
           <box
             flexDirection="column"
@@ -451,10 +454,22 @@ const CodeViewer = (props: CodeViewerProps) => {
             alignItems="center"
             backgroundColor="#1e1e1e"
           >
-            <text fg="#555555">No file open</text>
-            <text fg="#3c3c3c" marginTop={1}>
-              Select a file from the sidebar
-            </text>
+            <Show
+              when={isBinary()}
+              fallback={
+                <>
+                  <text fg="#555555">No file open</text>
+                  <text fg="#3c3c3c" marginTop={1}>
+                    Select a file from the sidebar
+                  </text>
+                </>
+              }
+            >
+              <text fg="#f44747">Binary file — cannot be displayed</text>
+              <text fg="#3c3c3c" marginTop={1}>
+                This file is not a text file and cannot be opened in the editor
+              </text>
+            </Show>
           </box>
         }
       >

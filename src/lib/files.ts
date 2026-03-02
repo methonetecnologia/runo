@@ -3,7 +3,7 @@
  * Pure functions — no UI dependencies, easily testable.
  */
 
-import { readdirSync, readFileSync, writeFileSync, statSync } from "fs"
+import { readdirSync, readFileSync, writeFileSync, statSync, openSync, readSync, closeSync } from "fs"
 import { join, basename } from "path"
 
 export interface FileEntry {
@@ -17,6 +17,106 @@ export interface FileEntry {
 
 /** Directories/files excluded from the tree */
 const IGNORED = new Set(["node_modules", ".git", ".DS_Store", "dist", "bun.lockb", ".bun"])
+
+/** File extensions known to be binary (images, media, compiled, archives, etc.) */
+const BINARY_EXTENSIONS = new Set([
+  // Images
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "ico",
+  "webp",
+  "svg",
+  "tiff",
+  "tif",
+  "avif",
+  // Media
+  "mp3",
+  "mp4",
+  "wav",
+  "ogg",
+  "flac",
+  "avi",
+  "mkv",
+  "mov",
+  "webm",
+  "m4a",
+  "aac",
+  // Fonts
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "eot",
+  // Archives
+  "zip",
+  "tar",
+  "gz",
+  "bz2",
+  "xz",
+  "7z",
+  "rar",
+  "zst",
+  // Compiled / binary
+  "wasm",
+  "so",
+  "dylib",
+  "dll",
+  "exe",
+  "o",
+  "a",
+  "class",
+  "pyc",
+  "pyo",
+  "node",
+  "bin",
+  "dat",
+  "db",
+  "sqlite",
+  "sqlite3",
+  // Documents
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  // Other
+  "map",
+  "min.js",
+  "min.css",
+])
+
+/**
+ * Checks if a file is binary by extension or by reading the first bytes.
+ * Returns true for files that should not be opened in the text editor.
+ */
+export function isBinaryFile(filePath: string): boolean {
+  const name = basename(filePath).toLowerCase()
+  const ext = name.includes(".") ? name.split(".").pop()! : ""
+
+  if (BINARY_EXTENSIONS.has(ext)) return true
+
+  // Check first 512 bytes for null bytes (strong binary indicator)
+  try {
+    const fd = openSync(filePath, "r")
+    const buf = new Uint8Array(512)
+    const bytesRead = readSync(fd, buf, 0, 512, 0)
+    closeSync(fd)
+
+    for (let i = 0; i < bytesRead; i++) {
+      if (buf[i] === 0) return true
+    }
+  } catch {
+    // If we can't read it, treat as binary (can't edit it anyway)
+    return true
+  }
+
+  return false
+}
 
 /** Recursively scans a directory into a sorted FileEntry tree. */
 export function scanDirectory(dir: string, depth = 0, maxDepth = 4): FileEntry[] {
@@ -85,18 +185,22 @@ export function toggleDirectory(entries: FileEntry[], targetPath: string): FileE
   return result
 }
 
-/** Reads file content as UTF-8. Returns error message on failure. */
+/** Reads file content as UTF-8. Returns error/warning message for binary or unreadable files. */
 export function readFileContent(filePath: string): string {
   try {
+    if (isBinaryFile(filePath)) {
+      return "[Binary file — cannot be displayed]"
+    }
     return readFileSync(filePath, "utf-8")
   } catch {
     return "[Error reading file]"
   }
 }
 
-/** Writes file content as UTF-8. Returns true on success, false on failure. */
+/** Writes file content as UTF-8. Returns true on success, false on failure. Blocks binary files. */
 export function writeFileContent(filePath: string, content: string): boolean {
   try {
+    if (isBinaryFile(filePath)) return false
     writeFileSync(filePath, content, "utf-8")
     return true
   } catch {
