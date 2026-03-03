@@ -121,17 +121,8 @@ export function useScrollSync(opts: UseScrollSyncOptions) {
       codeRef.viewport.selectable = false
       codeRef.viewport.shouldStartSelection = () => false
     }
-    const origStartSelection = renderer.startSelection?.bind(renderer)
-    if (origStartSelection) {
-      renderer.startSelection = (renderable: any, x: number, y: number) => {
-        let node = renderable
-        while (node) {
-          if (node === codeRef) return
-          node = node.parent
-        }
-        origStartSelection(renderable, x, y)
-      }
-    }
+    // Note: renderer.startSelection is globally disabled in App onMount.
+    // No per-scrollbox patching needed here.
     if (codeRef.verticalScrollBar) {
       const origOnChange = codeRef.verticalScrollBar._onChange
       codeRef.verticalScrollBar._onChange = (pos: number) => {

@@ -382,6 +382,12 @@ const App = () => {
   let sidebarScrollRef: any
 
   onMount(() => {
+    // Disable native OpenTUI text selection globally — only the CodeViewer's
+    // custom selection system should allow selecting text.
+    if ((renderer as any).startSelection) {
+      ;(renderer as any).startSelection = () => {}
+    }
+
     // Post-mount patch: enable horizontal scrolling on sidebar (skip in single-file mode)
     if (!singleFileMode) {
       setTimeout(() => enableScrollX(sidebarScrollRef), 50)
