@@ -24,7 +24,7 @@ import { useEditing } from "../hooks/useEditing"
 import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
 import { useHistory, type EditType } from "../hooks/useHistory"
-import { useSelection, type SelectionRange } from "../hooks/useSelection"
+import { useSelection } from "../hooks/useSelection"
 import { log } from "../lib/logger"
 import CursorChar from "./CursorChar"
 
@@ -55,7 +55,8 @@ const SELECTION_BG = "#264f78"
 /** Render token for a single segment of a line. */
 interface RenderToken extends ColorToken {
   cursor?: boolean
-  selected?: boolean
+  /** Expanded column where this token starts (for selection hit-test). */
+  expCol?: number
 }
 
 const CodeViewer = (props: CodeViewerProps) => {
@@ -679,86 +680,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     return { before, cursorToken, after }
   }
 
-  /**
-   * Apply selection highlighting to a list of tokens on a given line.
-   * Splits tokens at selection boundaries and marks selected portions.
-   */
-  const applySelectionToTokens = (
-    tokens: RenderToken[],
-    lineIndex: number,
-    rawLine: string,
-    selRange: SelectionRange
-  ): RenderToken[] => {
-    // Determine the expanded-col range of selection on this line
-    let selStartExpCol: number
-    let selEndExpCol: number
-
-    if (lineIndex < selRange.start.row || lineIndex > selRange.end.row) {
-      return tokens
-    }
-
-    if (lineIndex === selRange.start.row) {
-      selStartExpCol = expandTabs(rawLine.slice(0, selRange.start.col)).length
-    } else {
-      selStartExpCol = 0
-    }
-
-    if (lineIndex === selRange.end.row) {
-      selEndExpCol = expandTabs(rawLine.slice(0, selRange.end.col)).length
-    } else {
-      // Select the entire line including a trailing "virtual" character for newline
-      selEndExpCol = expandTabs(rawLine).length + 1
-    }
-
-    if (selStartExpCol >= selEndExpCol) return tokens
-
-    const result: RenderToken[] = []
-    let pos = 0
-
-    for (const t of tokens) {
-      const tEnd = pos + t.content.length
-
-      if (tEnd <= selStartExpCol || pos >= selEndExpCol) {
-        // Entirely outside selection
-        result.push(t)
-      } else if (pos >= selStartExpCol && tEnd <= selEndExpCol) {
-        // Entirely inside selection
-        result.push({ ...t, selected: true })
-      } else {
-        // Partially selected — split the token
-        if (pos < selStartExpCol) {
-          result.push({ content: t.content.slice(0, selStartExpCol - pos), color: t.color, cursor: t.cursor })
-        }
-        const sliceStart = Math.max(0, selStartExpCol - pos)
-        const sliceEnd = Math.min(t.content.length, selEndExpCol - pos)
-        result.push({
-          content: t.content.slice(sliceStart, sliceEnd),
-          color: t.color,
-          selected: true,
-          cursor: t.cursor,
-        })
-        if (tEnd > selEndExpCol) {
-          result.push({ content: t.content.slice(selEndExpCol - pos), color: t.color })
-        }
-      }
-      pos = tEnd
-    }
-
-    // If selection extends past end of line (trailing virtual char), add selected space
-    if (selEndExpCol > pos && lineIndex !== selRange.end.row) {
-      result.push({ content: " ", color: DEFAULT_FG, selected: true })
-    }
-
-    return result
-  }
-
-  const buildLineTokens = (
-    lineIndex: number,
-    rawLine: string,
-    active: boolean,
-    col: number,
-    selRange: SelectionRange | null
-  ): RenderToken[] => {
+  const buildLineTokens = (lineIndex: number, rawLine: string, active: boolean, col: number): RenderToken[] => {
     let tokens: RenderToken[] = getLineTokens(lineIndex, rawLine)
 
     if (active) {
@@ -776,9 +698,11 @@ const CodeViewer = (props: CodeViewerProps) => {
       }
     }
 
-    // Apply selection highlighting
-    if (selRange) {
-      tokens = applySelectionToTokens(tokens, lineIndex, rawLine, selRange)
+    // Stamp each token with its expanded column offset (for selection bg)
+    let expPos = 0
+    for (const t of tokens) {
+      t.expCol = expPos
+      expPos += t.content.length
     }
 
     return tokens
@@ -875,18 +799,33 @@ const CodeViewer = (props: CodeViewerProps) => {
                   const isActive = () => i() === cursor.cursorRow() && props.focused
                   const lineBg = () => (isActive() ? "#2a2d2e" : "#1e1e1e")
 
+                  // Token memo: depends on line content, cursor, highlights — NOT selection
                   const renderTokens = createMemo(() => {
                     const raw = lines()[i()] || ""
                     const active = isActive()
                     const col = active ? cursor.cursorCol() : 0
-                    // Only read selRange when this line is actually in selection range,
-                    // reducing unnecessary recalculation for lines outside the selection.
-                    const sr = selRange()
-                    const lineSelRange = sr && i() >= sr.start.row && i() <= sr.end.row ? sr : null
-                    return buildLineTokens(i(), raw, active, col, lineSelRange)
+                    return buildLineTokens(i(), raw, active, col)
                   })
 
                   const activeBg = createMemo(() => lineBg())
+
+                  /**
+                   * Compute the selection column range for this line.
+                   * Returns null if this line is not in the selection.
+                   * Only depends on selRange — does NOT cause token recalculation.
+                   */
+                  const lineSelCols = createMemo((): { start: number; end: number } | null => {
+                    const sr = selRange()
+                    if (!sr) return null
+                    const row = i()
+                    if (row < sr.start.row || row > sr.end.row) return null
+                    const raw = lines()[row] || ""
+                    const start = row === sr.start.row ? expandTabs(raw.slice(0, sr.start.col)).length : 0
+                    const end =
+                      row === sr.end.row ? expandTabs(raw.slice(0, sr.end.col)).length : expandTabs(raw).length + 1
+                    if (start >= end) return null
+                    return { start, end }
+                  })
 
                   return (
                     <box
@@ -916,19 +855,30 @@ const CodeViewer = (props: CodeViewerProps) => {
                       }}
                     >
                       <For each={renderTokens()}>
-                        {(token: RenderToken) =>
-                          token.cursor ? (
+                        {(token: RenderToken) => {
+                          // Reactive bg: depends on lineSelCols (selection) not on token memo
+                          const isSelected = () => {
+                            const sel = lineSelCols()
+                            if (!sel) return false
+                            const tStart = token.expCol ?? 0
+                            const tEnd = tStart + token.content.length
+                            // Token overlaps selection if it starts before sel.end and ends after sel.start
+                            return tStart < sel.end && tEnd > sel.start
+                          }
+                          const tokenBg = () => (isSelected() ? SELECTION_BG : lineBg())
+
+                          return token.cursor ? (
                             <CursorChar
                               token={token}
-                              bg={token.selected ? SELECTION_BG : activeBg()}
+                              bg={isSelected() ? SELECTION_BG : activeBg()}
                               cursorVisible={cursor.cursorVisible}
                             />
                           ) : (
-                            <text fg={token.color} bg={token.selected ? SELECTION_BG : lineBg()} wrapMode="none">
+                            <text fg={token.color} bg={tokenBg()} wrapMode="none">
                               {token.content}
                             </text>
                           )
-                        }
+                        }}
                       </For>
                     </box>
                   )

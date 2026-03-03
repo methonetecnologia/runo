@@ -59,13 +59,16 @@ export function useSelection() {
     })
   }
 
-  /** Extend selection head to new position. */
+  /** Extend selection head to new position. Skip if unchanged. */
   const extendSelection = (row: number, col: number) => {
+    const h = head()
+    if (h && h.row === row && h.col === col) return
     setHead({ row, col })
   }
 
-  /** Clear any active selection. */
+  /** Clear any active selection. Skip if already clear. */
   const clearSelection = () => {
+    if (!anchor() && !head()) return
     batch(() => {
       setAnchor(null)
       setHead(null)
