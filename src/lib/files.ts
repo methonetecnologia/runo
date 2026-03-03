@@ -170,6 +170,64 @@ export function flattenTree(entries: FileEntry[]): FileEntry[] {
   return result
 }
 
+/**
+ * Builds indentation guide prefixes for a flat tree list.
+ * Returns an array of strings (one per entry) using box-drawing chars:
+ *   "│ " — vertical line continuation (ancestor still has siblings below)
+ *   "├ " — branch connector (entry has siblings after it)
+ *   "└ " — last branch (entry is the last child)
+ *   "  " — blank (ancestor was the last child, no line needed)
+ *
+ * Depth-0 entries get no prefix (they are root-level).
+ */
+export function buildTreeGuides(flat: FileEntry[]): string[] {
+  const guides: string[] = []
+  // For each depth level, track whether the last-seen entry at that depth
+  // is the final sibling (so we know whether to draw │ or blank above it).
+  // We do this by scanning forward: an entry is "last at its depth" if no
+  // subsequent entry at the same depth (or shallower) shares the same parent depth.
+
+  for (let i = 0; i < flat.length; i++) {
+    const entry = flat[i]
+    if (entry.depth === 0) {
+      guides.push("")
+      continue
+    }
+
+    // Determine if this entry is the last sibling at its depth:
+    // scan forward until we find another entry at the same or shallower depth.
+    let isLast = true
+    for (let j = i + 1; j < flat.length; j++) {
+      if (flat[j].depth < entry.depth) break // went up — no more siblings
+      if (flat[j].depth === entry.depth) {
+        isLast = false
+        break
+      }
+    }
+
+    // Build prefix for levels 1..depth-1 (ancestors), then the connector for this level.
+    let prefix = ""
+    for (let d = 1; d < entry.depth; d++) {
+      // Check if the ancestor at depth d still has siblings below this point.
+      let ancestorHasMore = false
+      for (let j = i + 1; j < flat.length; j++) {
+        if (flat[j].depth < d) break
+        if (flat[j].depth === d) {
+          ancestorHasMore = true
+          break
+        }
+      }
+      prefix += ancestorHasMore ? "│ " : "  "
+    }
+
+    // Connector for the current depth level
+    prefix += isLast ? "└ " : "├ "
+    guides.push(prefix)
+  }
+
+  return guides
+}
+
 /** Immutably toggles expanded state of a directory by path. */
 export function toggleDirectory(entries: FileEntry[], targetPath: string): FileEntry[] {
   const result: FileEntry[] = []

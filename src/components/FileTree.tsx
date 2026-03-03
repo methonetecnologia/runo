@@ -17,7 +17,7 @@
 
 import { createSignal, createMemo, For, onMount } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
-import { type FileEntry, flattenTree, getFileIcon, computeTreeWidth } from "../lib/files"
+import { type FileEntry, flattenTree, buildTreeGuides, getFileIcon, computeTreeWidth } from "../lib/files"
 
 /** Lines from viewport edge before scroll kicks in. */
 const SCROLL_MARGIN = 3
@@ -48,6 +48,9 @@ const FileTree = (props: FileTreeProps) => {
 
   /** Flattened visible entries (only expanded directories show children) */
   const flatFiles = createMemo(() => flattenTree(props.files))
+
+  /** Indentation guide prefixes for each flat entry */
+  const guides = createMemo(() => buildTreeGuides(flatFiles()))
 
   /** Maximum display width needed for all visible entries */
   const maxWidth = createMemo(() => computeTreeWidth(flatFiles()))
@@ -154,16 +157,20 @@ const FileTree = (props: FileTreeProps) => {
     <box flexDirection="column" width={maxWidth()} onMouseOut={() => setHovered(-1)}>
       <For each={flatFiles()}>
         {(entry, i) => {
-          // Build display label: indentation + icon + filename
-          const label = "  ".repeat(entry.depth) + getFileIcon(entry) + entry.name
+          // Build display label: guide prefix + icon + filename
+          const guide = () => guides()[i()] || ""
+          const label = () => guide() + getFileIcon(entry) + entry.name
 
           // Visual state helpers
           const selected = () => i() === cursor() && props.focused
           const isHovered = () => i() === hovered()
           const isCursor = () => i() === cursor()
 
+          // Guide line color (subtle, doesn't change with selection)
+          const GUIDE_COLOR = "#454545"
+
           // Foreground color: selected > hovered > directory > file
-          const fg = () => {
+          const entryFg = () => {
             if (selected()) return "#ffffff"
             if (isHovered()) return "#e8e8e8"
             if (entry.isDirectory) return "#c8a86c"
@@ -178,10 +185,10 @@ const FileTree = (props: FileTreeProps) => {
           }
 
           return (
-            <text
-              fg={fg()}
-              bg={bg()}
-              wrapMode="none"
+            <box
+              flexDirection="row"
+              backgroundColor={bg()}
+              width="100%"
               onMouseOver={() => setHovered(i())}
               onMouseOut={() => {
                 if (hovered() === i()) setHovered(-1)
@@ -193,8 +200,15 @@ const FileTree = (props: FileTreeProps) => {
                 else props.onSelect(entry)
               }}
             >
-              {label}
-            </text>
+              {guide() ? (
+                <text fg={GUIDE_COLOR} bg={bg()} wrapMode="none">
+                  {guide()}
+                </text>
+              ) : null}
+              <text fg={entryFg()} bg={bg()} wrapMode="none">
+                {getFileIcon(entry) + entry.name}
+              </text>
+            </box>
           )
         }}
       </For>
