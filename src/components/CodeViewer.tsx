@@ -95,6 +95,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     focused: () => props.focused,
     codeStartX: () => props.codeStartX,
     codeScrollRef: () => codeScrollRef,
+    // eslint-disable-next-line solid/reactivity -- imperative callback, not reactive
     onCursorChange: props.onCursorChange,
   })
 
@@ -104,6 +105,7 @@ const CodeViewer = (props: CodeViewerProps) => {
     setCursorRow: cursor.setCursorRow,
     cursorCol: cursor.cursorCol,
     setCursorCol: cursor.setCursorCol,
+    // eslint-disable-next-line solid/reactivity -- imperative callback, not reactive
     onContentChange: props.onContentChange,
   })
 
@@ -148,6 +150,7 @@ const CodeViewer = (props: CodeViewerProps) => {
       return
     }
     // Schedule push on next microtask so props.content has the new value
+    // eslint-disable-next-line solid/reactivity -- intentionally reads props.content in microtask for latest value
     queueMicrotask(() => {
       log.editor.debug({ contentLen: props.content.length, type: editType }, "pushHistory")
       history.push(props.content, cursor.cursorRow(), cursor.cursorCol(), editType)
@@ -293,6 +296,7 @@ const CodeViewer = (props: CodeViewerProps) => {
 
   const rAny = renderer as any
   const origStdinListener = rAny.stdinListener
+  // eslint-disable-next-line no-control-regex
   const SGR_MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g
 
   const wrappedStdinListener = (data: Buffer) => {
@@ -395,6 +399,7 @@ const CodeViewer = (props: CodeViewerProps) => {
   }
 
   rAny.stdin.removeListener("data", origStdinListener)
+  // eslint-disable-next-line solid/reactivity -- imperative stdin listener, reads props.focused intentionally
   rAny.stdin.on("data", wrappedStdinListener)
   rAny.stdinListener = wrappedStdinListener
 

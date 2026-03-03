@@ -6,7 +6,6 @@
  */
 
 import { createEffect, onMount } from "solid-js"
-import { useRenderer } from "@opentui/solid"
 import { enableScrollX, constrainScrollbox, styleScrollbars } from "../lib/scrollbox"
 import { expandTabs } from "../lib/files"
 
@@ -34,8 +33,6 @@ export interface UseScrollSyncOptions {
 }
 
 export function useScrollSync(opts: UseScrollSyncOptions) {
-  const renderer = useRenderer()
-
   /** Sync gutter vertical scroll to match the code area. */
   const syncGutterScroll = () => {
     const codeRef = opts.codeScrollRef()

@@ -157,9 +157,8 @@ const FileTree = (props: FileTreeProps) => {
     <box flexDirection="column" width={maxWidth()} onMouseOut={() => setHovered(-1)}>
       <For each={flatFiles()}>
         {(entry, i) => {
-          // Build display label: guide prefix + icon + filename
+          // Guide prefix for indentation lines
           const guide = () => guides()[i()] || ""
-          const label = () => guide() + getFileIcon(entry) + entry.name
 
           // Visual state helpers
           const selected = () => i() === cursor() && props.focused

@@ -39,7 +39,6 @@ import { enableScrollX } from "./lib/scrollbox"
 import { preloadHighlighter } from "./lib/highlighter"
 import { parseCli } from "./cli"
 import { log } from "./lib/logger"
-// @ts-ignore — JSON import for version
 import pkg from "../package.json"
 
 /** Handle CLI subcommands (upgrade, --version, --help) before TUI boot */
@@ -609,84 +608,80 @@ const App = () => {
 
   // -- Render --
 
-  // Single-file mode: no sidebar, no tabs — just title bar + editor + status bar
-  if (singleFileMode) {
-    return (
-      <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
-        <TitleBar
-          titlePath={SINGLE_FILE!}
-          termWidth={dimensions().width}
-          termHeight={dimensions().height}
-          onExit={requestExit}
-          onSave={saveFile}
-          onUndo={() => {
-            const h = editorHandle()
-            if (h) h.undo()
-          }}
-          onRedo={() => {
-            const h = editorHandle()
-            if (h) h.redo()
-          }}
-          onAbout={() => setShowAbout(true)}
-          singleFileMode={true}
-        />
+  // Layout: single-file mode vs full IDE mode
+  // eslint-disable-next-line solid/components-return-once -- singleFileMode is a constant, not reactive
+  return singleFileMode ? (
+    <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
+      <TitleBar
+        titlePath={SINGLE_FILE!}
+        termWidth={dimensions().width}
+        termHeight={dimensions().height}
+        onExit={requestExit}
+        onSave={saveFile}
+        onUndo={() => {
+          const h = editorHandle()
+          if (h) h.undo()
+        }}
+        onRedo={() => {
+          const h = editorHandle()
+          if (h) h.redo()
+        }}
+        onAbout={() => setShowAbout(true)}
+        singleFileMode={true}
+      />
 
-        {/* Editor at full width */}
-        <box flexDirection="column" flexGrow={1} width="100%" height="100%">
-          <ErrorBoundary
-            fallback={(err: Error) => (
-              <box flexGrow={1} justifyContent="center" alignItems="center" backgroundColor="#1e1e1e">
-                <text fg="#f44747">Editor error: {err.message}</text>
-              </box>
-            )}
-          >
-            <CodeViewer
-              filePath={openFile()}
-              content={fileContent()}
-              focused={true}
-              availableWidth={dimensions().width}
-              availableHeight={dimensions().height - 2}
-              codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
-              codeStartY={1}
-              onContentChange={handleContentChange}
-              onCursorChange={(ln, col) => {
-                setCursorLine(ln)
-                setCursorCol(col)
-              }}
-              onHandle={setEditorHandle}
-              initialCursorRow={activeTabCache()?.cursorRow}
-              initialCursorCol={activeTabCache()?.cursorCol}
-              initialScrollTop={activeTabCache()?.scrollTop}
-              initialScrollLeft={activeTabCache()?.scrollLeft}
-              initialHistoryState={activeTabCache()?.historyState}
-            />
-          </ErrorBoundary>
-        </box>
-
-        {/* Status bar */}
-        <StatusBar
-          filePath={openFile()}
-          panel={"editor"}
-          lineCount={lineCount()}
-          cursorLine={cursorLine()}
-          cursorCol={cursorCol()}
-          isDirty={isCurrentFileDirty()}
-        />
-
-        <AboutModal />
-        <UnsavedModal
-          open={pendingAction() !== null}
-          message={unsavedModalMessage()}
-          onSave={handleModalSave}
-          onDiscard={handleModalDiscard}
-          onCancel={handleModalCancel}
-        />
+      {/* Editor at full width */}
+      <box flexDirection="column" flexGrow={1} width="100%" height="100%">
+        <ErrorBoundary
+          fallback={(err: Error) => (
+            <box flexGrow={1} justifyContent="center" alignItems="center" backgroundColor="#1e1e1e">
+              <text fg="#f44747">Editor error: {err.message}</text>
+            </box>
+          )}
+        >
+          <CodeViewer
+            filePath={openFile()}
+            content={fileContent()}
+            focused={true}
+            availableWidth={dimensions().width}
+            availableHeight={dimensions().height - 2}
+            codeStartX={gutterWidth(splitLines(fileContent()).length) + 1}
+            codeStartY={1}
+            onContentChange={handleContentChange}
+            onCursorChange={(ln, col) => {
+              setCursorLine(ln)
+              setCursorCol(col)
+            }}
+            onHandle={setEditorHandle}
+            initialCursorRow={activeTabCache()?.cursorRow}
+            initialCursorCol={activeTabCache()?.cursorCol}
+            initialScrollTop={activeTabCache()?.scrollTop}
+            initialScrollLeft={activeTabCache()?.scrollLeft}
+            initialHistoryState={activeTabCache()?.historyState}
+          />
+        </ErrorBoundary>
       </box>
-    )
-  }
 
-  // Full IDE mode: sidebar + tabs + editor
-  return (
+      {/* Status bar */}
+      <StatusBar
+        filePath={openFile()}
+        panel={"editor"}
+        lineCount={lineCount()}
+        cursorLine={cursorLine()}
+        cursorCol={cursorCol()}
+        isDirty={isCurrentFileDirty()}
+      />
+
+      <AboutModal />
+      <UnsavedModal
+        open={pendingAction() !== null}
+        message={unsavedModalMessage()}
+        onSave={handleModalSave}
+        onDiscard={handleModalDiscard}
+        onCancel={handleModalCancel}
+      />
+    </box>
+  ) : (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#1e1e1e">
       <TitleBar
         titlePath={CWD}

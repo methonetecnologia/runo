@@ -37,6 +37,10 @@ const TabBar = (props: TabBarProps) => {
   /** Track which tab the mouse is hovering over */
   const [hoveredTab, setHoveredTab] = createSignal<string | null>(null)
 
+  /** Double-click detection state */
+  let lastClickTime = 0
+  let lastClickPath = ""
+
   return (
     <Show
       when={props.tabs.length > 0}
@@ -83,17 +87,19 @@ const TabBar = (props: TabBarProps) => {
                 onMouseOut={() => {
                   if (hoveredTab() === tab.path) setHoveredTab(null)
                 }}
-                onMouseDown={() => props.onSelect(tab.path)}
-                onDblClick={() => {
-                  if (isPreview()) props.onPin(tab.path)
+                onMouseDown={() => {
+                  props.onSelect(tab.path)
+                  // Double-click detection: pin preview tab
+                  const now = Date.now()
+                  if (now - lastClickTime < 400 && lastClickPath === tab.path) {
+                    if (isPreview()) props.onPin(tab.path)
+                  }
+                  lastClickTime = now
+                  lastClickPath = tab.path
                 }}
               >
                 {/* Tab name */}
-                <text
-                  fg={fg()}
-                  bg={bg()}
-                  attributes={isPreview() ? 3 : 0}
-                >
+                <text fg={fg()} bg={bg()} attributes={isPreview() ? 3 : 0}>
                   {` ${displayName()} `}
                 </text>
                 {/* Close button or spacer */}

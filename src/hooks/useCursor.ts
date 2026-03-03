@@ -7,7 +7,6 @@
 
 import { createSignal, onMount, onCleanup, createEffect } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import { expandTabs } from "../lib/files"
 
 export interface UseCursorOptions {
   /** Reactive getter for the split lines array */

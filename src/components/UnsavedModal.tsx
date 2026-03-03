@@ -13,7 +13,7 @@
  * Keyboard: Tab/Shift+Tab to cycle buttons, Enter to confirm, Escape to cancel.
  */
 
-import { createSignal, createEffect, Show } from "solid-js"
+import { createSignal, createEffect, Show, For } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 
 interface UnsavedModalProps {
@@ -127,23 +127,25 @@ const UnsavedModal = (props: UnsavedModalProps) => {
 
         {/* Buttons row */}
         <box flexDirection="row" marginTop={1} gap={1}>
-          {BUTTONS.map((label, idx) => {
-            const isFocused = () => focused() === idx
-            const callbacks = [props.onSave, props.onDiscard, props.onCancel]
-            return (
-              <box
-                onMouseDown={(e: any) => {
-                  e?.stopPropagation?.()
-                  callbacks[idx]()
-                }}
-                onMouseOver={() => setFocused(idx as ButtonIndex)}
-              >
-                <text fg={isFocused() ? "#ffffff" : "#999999"} bg={isFocused() ? "#007acc" : "#333333"}>
-                  {` ${label} `}
-                </text>
-              </box>
-            )
-          })}
+          <For each={BUTTONS}>
+            {(label, idx) => {
+              const isFocused = () => focused() === idx()
+              const callbacks = [props.onSave, props.onDiscard, props.onCancel]
+              return (
+                <box
+                  onMouseDown={(e: any) => {
+                    e?.stopPropagation?.()
+                    callbacks[idx()]()
+                  }}
+                  onMouseOver={() => setFocused(idx() as ButtonIndex)}
+                >
+                  <text fg={isFocused() ? "#ffffff" : "#999999"} bg={isFocused() ? "#007acc" : "#333333"}>
+                    {` ${label} `}
+                  </text>
+                </box>
+              )
+            }}
+          </For>
         </box>
       </box>
     </Show>
