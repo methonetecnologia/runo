@@ -1,6 +1,6 @@
 {
   "name": "runo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Terminal IDE inspired by VS Code, built on OpenTUI and SolidJS",
   "main": "src/index.tsx",
   "scripts": {
