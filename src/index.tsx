@@ -99,6 +99,9 @@ const App = () => {
     SINGLE_FILE ? [{ path: SINGLE_FILE, name: basename(SINGLE_FILE), mode: "pinned" }] : []
   )
 
+  /** Whether the sidebar is visible (toggled via Ctrl+B or View > Toggle Sidebar) */
+  const [sidebarVisible, setSidebarVisible] = createSignal(!singleFileMode)
+
   /** Current sidebar width in columns (user-resizable via drag handle) */
   const [sidebarWidth, setSidebarWidth] = createSignal(30)
 
@@ -415,7 +418,16 @@ const App = () => {
   }
 
   const toggleSidebar = () => {
-    setActivePanel((p) => (p === "tree" ? "editor" : "tree"))
+    setSidebarVisible((v) => {
+      if (v) {
+        // Hiding sidebar — move focus to editor
+        setActivePanel("editor")
+        return false
+      }
+      // Showing sidebar — move focus to tree
+      setActivePanel("tree")
+      return true
+    })
   }
 
   // -- Keyboard shortcuts --
@@ -705,47 +717,49 @@ const App = () => {
         {/* Sidebar: explorer header + scrollable file tree */}
         <box
           flexDirection="column"
-          width={clampedSidebarWidth()}
+          width={sidebarVisible() ? clampedSidebarWidth() : 0}
           height="100%"
           backgroundColor="#252526"
           onMouseDown={() => setActivePanel("tree")}
         >
-          <box width="100%" height={1} backgroundColor="#252526">
-            <text fg="#bbbbbb" bg="#252526" attributes={1}>
-              {" EXPLORER"}
-            </text>
-          </box>
-          <ErrorBoundary
-            fallback={(err: Error) => (
-              <box flexGrow={1} backgroundColor="#252526">
-                <text fg="#f44747">Tree error: {err.message}</text>
-              </box>
-            )}
-          >
-            <scrollbox
-              ref={sidebarScrollRef}
-              flexGrow={1}
-              width="100%"
-              focused={activePanel() === "tree"}
-              scrollX={true}
-              scrollY={true}
+          <Show when={sidebarVisible()}>
+            <box width="100%" height={1} backgroundColor="#252526">
+              <text fg="#bbbbbb" bg="#252526" attributes={1}>
+                {" EXPLORER"}
+              </text>
+            </box>
+            <ErrorBoundary
+              fallback={(err: Error) => (
+                <box flexGrow={1} backgroundColor="#252526">
+                  <text fg="#f44747">Tree error: {err.message}</text>
+                </box>
+              )}
             >
-              <FileTree
-                files={files()}
+              <scrollbox
+                ref={sidebarScrollRef}
+                flexGrow={1}
+                width="100%"
                 focused={activePanel() === "tree"}
-                onSelect={handleOpenFile}
-                onToggle={handleToggleDir}
-                onFocus={() => setActivePanel("tree")}
-                scrollRef={sidebarScrollRef}
-                availableHeight={dimensions().height - 3}
-              />
-            </scrollbox>
-          </ErrorBoundary>
+                scrollX={true}
+                scrollY={true}
+              >
+                <FileTree
+                  files={files()}
+                  focused={activePanel() === "tree"}
+                  onSelect={handleOpenFile}
+                  onToggle={handleToggleDir}
+                  onFocus={() => setActivePanel("tree")}
+                  scrollRef={sidebarScrollRef}
+                  availableHeight={dimensions().height - 3}
+                />
+              </scrollbox>
+            </ErrorBoundary>
+          </Show>
         </box>
 
         {/* Resize handle: 1-column draggable border between sidebar and editor */}
         <box
-          width={1}
+          width={sidebarVisible() ? 1 : 0}
           height="100%"
           backgroundColor={borderHandleColor()}
           onMouseOver={() => setDragHover(true)}

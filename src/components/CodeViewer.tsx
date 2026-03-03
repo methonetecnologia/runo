@@ -696,10 +696,17 @@ const CodeViewer = (props: CodeViewerProps) => {
     const ht = highlightTokens()
     if (ht && lineIndex < ht.length && ht[lineIndex] && ht[lineIndex].length > 0) {
       const tokens: ColorToken[] = []
+      let concat = ""
       for (const t of ht[lineIndex]) {
-        tokens.push(expandTokenTabs(t))
+        const exp = expandTokenTabs(t)
+        tokens.push(exp)
+        concat += exp.content
       }
-      return tokens
+      // Only use cached tokens if the concatenated text matches the actual line.
+      // During fast editing the stale tokens would show ghost text otherwise.
+      if (concat === expandTabs(rawLine)) {
+        return tokens
+      }
     }
     return [{ content: expandTabs(rawLine) || " ", color: DEFAULT_FG }]
   }

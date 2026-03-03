@@ -100,12 +100,12 @@ const MenuDropdown = (props: MenuDropdownProps) => {
             const bg = () => (isHovered() ? "#094771" : "#252526")
 
             const padded = () => {
-              const w = dropdownWidth() - 2
+              const inner = dropdownWidth() - 2 // usable width inside borders
               if (item.shortcut) {
-                const gap = w - item.label.length - item.shortcut.length
-                return " " + item.label + " ".repeat(Math.max(1, gap)) + item.shortcut
+                const gap = inner - 1 - item.label.length - item.shortcut.length - 1
+                return " " + item.label + " ".repeat(Math.max(1, gap)) + item.shortcut + " "
               }
-              return " " + item.label + " ".repeat(Math.max(0, w - item.label.length - 1))
+              return " " + item.label + " ".repeat(Math.max(0, inner - 1 - item.label.length))
             }
 
             return (
