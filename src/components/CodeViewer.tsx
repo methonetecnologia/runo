@@ -694,7 +694,7 @@ const CodeViewer = (props: CodeViewerProps) => {
 
   const getLineTokens = (lineIndex: number, rawLine: string): ColorToken[] => {
     const ht = highlightTokens()
-    if (ht && ht.length === lines().length && ht[lineIndex] && ht[lineIndex].length > 0) {
+    if (ht && lineIndex < ht.length && ht[lineIndex] && ht[lineIndex].length > 0) {
       const tokens: ColorToken[] = []
       for (const t of ht[lineIndex]) {
         tokens.push(expandTokenTabs(t))

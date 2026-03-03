@@ -44,17 +44,17 @@ export function useHighlight(opts: UseHighlightOptions) {
 
     const gen = ++hlGeneration
 
-    // Invalidate stale tokens immediately so line colours don't desync
-    setHighlightTokens(null)
+    // Keep previous tokens visible while re-highlighting (no flash to white).
+    // The getLineTokens fallback in CodeViewer handles any line-count mismatch.
 
-    // Debounce: 100ms after last content change
+    // Debounce: 50ms after last content change
     hlTimer = setTimeout(() => {
       highlightCode(content, lang).then((tokens) => {
         if (gen === hlGeneration) {
           setHighlightTokens(tokens)
         }
       })
-    }, 100)
+    }, 50)
   })
 
   return { highlightTokens }
