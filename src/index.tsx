@@ -30,9 +30,11 @@ import {
 } from "./lib/files"
 import FileTree from "./components/FileTree"
 import CodeViewer, { type CodeViewerHandle } from "./components/CodeViewer"
+import { type HistoryState } from "./hooks/useHistory"
 import TabBar from "./components/TabBar"
 import StatusBar from "./components/StatusBar"
 import TitleBar from "./components/TitleBar"
+import UnsavedModal from "./components/UnsavedModal"
 import { enableScrollX } from "./lib/scrollbox"
 import { preloadHighlighter } from "./lib/highlighter"
 import { parseCli } from "./cli"
@@ -109,6 +111,21 @@ const App = () => {
   /** Set of file paths with unsaved changes */
   const [dirtyFiles, setDirtyFiles] = createSignal<Set<string>>(new Set())
 
+  /** Per-tab cache — preserves unsaved content, cursor position, scroll offset, and undo/redo history */
+  interface TabCache {
+    content: string
+    cursorRow: number
+    cursorCol: number
+    scrollTop: number
+    scrollLeft: number
+    historyState: HistoryState | null
+  }
+  const [tabCache, setTabCache] = createSignal<Map<string, TabCache>>(new Map())
+
+  /** Pending close action waiting for user confirmation via UnsavedModal */
+  type PendingAction = { type: "closeTab"; path: string } | { type: "quit" } | null
+  const [pendingAction, setPendingAction] = createSignal<PendingAction>(null)
+
   /** Current cursor position (1-based) */
   const [cursorLine, setCursorLine] = createSignal(1)
   const [cursorCol, setCursorCol] = createSignal(1)
@@ -120,6 +137,9 @@ const App = () => {
     if (!openFile()) return 0
     return fileContent().split("\n").length
   })
+
+  /** Cached cursor/scroll state for the currently active file (used as initial props for CodeViewer) */
+  const activeTabCache = createMemo(() => tabCache().get(openFile() ?? "") ?? null)
 
   /** Sidebar width clamped to terminal bounds (prevents overflow) */
   const clampedSidebarWidth = createMemo(() => {
@@ -147,10 +167,37 @@ const App = () => {
    * - Double click or editing pins the tab (stays open)
    * - If the file is already open (pinned or preview), just switch to it
    */
+  /** Save the current tab's full state (content, cursor, scroll, history) into the cache */
+  const saveCurrentTabState = () => {
+    const currentPath = openFile()
+    if (!currentPath) return
+    const handle = editorHandle()
+    const scrollPos = handle?.getScrollPosition() ?? { scrollTop: 0, scrollLeft: 0 }
+    const cursorPos = handle?.getCursorPosition() ?? { row: 0, col: 0 }
+    const historyState = handle?.getHistoryState() ?? null
+    const cache = new Map(tabCache())
+    cache.set(currentPath, {
+      content: fileContent(),
+      cursorRow: cursorPos.row,
+      cursorCol: cursorPos.col,
+      scrollTop: scrollPos.scrollTop,
+      scrollLeft: scrollPos.scrollLeft,
+      historyState,
+    })
+    setTabCache(cache)
+  }
+
   const handleOpenFile = (entry: FileEntry) => {
     if (entry.isDirectory) return
+    if (entry.path === openFile()) return
     log.app.info({ path: entry.path }, "openFile")
-    const content = readFileContent(entry.path)
+
+    // Save current tab state before switching
+    saveCurrentTabState()
+
+    // Use cached content if available (preserves unsaved edits), otherwise read from disk
+    const cached = tabCache().get(entry.path)
+    const content = cached !== undefined ? cached.content : readFileContent(entry.path)
 
     batch(() => {
       setOpenFile(entry.path)
@@ -183,9 +230,10 @@ const App = () => {
   }
 
   /**
-   * Closes a tab by path. If closing the active tab, switch to the nearest neighbor.
+   * Force-closes a tab by path (no dirty check). Cleans up cache.
+   * If closing the active tab, switch to the nearest neighbor.
    */
-  const closeTab = (path: string) => {
+  const forceCloseTab = (path: string) => {
     const currentTabs = tabs()
     const index = currentTabs.findIndex((t) => t.path === path)
     if (index === -1) return
@@ -195,6 +243,15 @@ const App = () => {
     batch(() => {
       setTabs(newTabs)
 
+      // Clean up dirty state and cache for this file
+      const updatedDirty = new Set(dirtyFiles())
+      updatedDirty.delete(path)
+      setDirtyFiles(updatedDirty)
+
+      const cache = new Map(tabCache())
+      cache.delete(path)
+      setTabCache(cache)
+
       // If we closed the active tab, switch to a neighbor or clear
       if (openFile() === path) {
         if (newTabs.length === 0) {
@@ -203,7 +260,9 @@ const App = () => {
         } else {
           const nextIndex = Math.min(index, newTabs.length - 1)
           const nextTab = newTabs[nextIndex]
-          const content = readFileContent(nextTab.path)
+          // Load from cache if available, otherwise from disk
+          const cached = cache.get(nextTab.path)
+          const content = cached !== undefined ? cached.content : readFileContent(nextTab.path)
           setOpenFile(nextTab.path)
           setFileContent(content)
         }
@@ -212,12 +271,44 @@ const App = () => {
   }
 
   /**
+   * Request to close a tab. If the file has unsaved changes, shows the
+   * confirmation modal instead of closing immediately.
+   */
+  const requestCloseTab = (path: string) => {
+    if (dirtyFiles().has(path)) {
+      setPendingAction({ type: "closeTab", path })
+    } else {
+      forceCloseTab(path)
+    }
+  }
+
+  /**
+   * Request to exit the editor. If any files have unsaved changes,
+   * shows the confirmation modal.
+   */
+  const requestExit = () => {
+    if (dirtyFiles().size > 0) {
+      setPendingAction({ type: "quit" })
+    } else {
+      renderer.destroy()
+    }
+  }
+
+  /**
    * Switches to a tab by path (clicking on a tab in the tab bar).
+   * Saves current content to cache before switching, loads from cache if available.
    */
   const switchTab = (path: string) => {
     if (openFile() === path) return
     log.app.info({ path }, "switchTab")
-    const content = readFileContent(path)
+
+    // Save current tab state before switching
+    saveCurrentTabState()
+
+    // Load from cache if available, otherwise from disk
+    const cached = tabCache().get(path)
+    const content = cached !== undefined ? cached.content : readFileContent(path)
+
     batch(() => {
       setOpenFile(path)
       setFileContent(content)
@@ -233,21 +324,49 @@ const App = () => {
       const updated = new Set(dirtyFiles())
       updated.add(path)
       setDirtyFiles(updated)
+
+      // Update content in tab cache (keep existing cursor/scroll/history or use defaults)
+      const cache = new Map(tabCache())
+      const existing = cache.get(path)
+      cache.set(path, {
+        content: newContent,
+        cursorRow: existing?.cursorRow ?? 0,
+        cursorCol: existing?.cursorCol ?? 0,
+        scrollTop: existing?.scrollTop ?? 0,
+        scrollLeft: existing?.scrollLeft ?? 0,
+        historyState: existing?.historyState ?? null,
+      })
+      setTabCache(cache)
+
       // Auto-pin the tab when editing
       pinTab(path)
     }
   }
 
+  /** Save a specific file path (uses cached content if not the active file) */
+  const saveFilePath = (path: string): boolean => {
+    log.app.info({ path }, "saveFile")
+    const cached = tabCache().get(path)
+    const content = path === openFile() ? fileContent() : cached?.content
+    if (content === undefined) return false
+    const success = writeFileContent(path, content)
+    if (success) {
+      const updatedDirty = new Set(dirtyFiles())
+      updatedDirty.delete(path)
+      setDirtyFiles(updatedDirty)
+
+      const cache = new Map(tabCache())
+      cache.delete(path)
+      setTabCache(cache)
+    }
+    return success
+  }
+
+  /** Save the currently open file */
   const saveFile = () => {
     const path = openFile()
     if (!path) return
-    log.app.info({ path }, "saveFile")
-    const success = writeFileContent(path, fileContent())
-    if (success) {
-      const updated = new Set(dirtyFiles())
-      updated.delete(path)
-      setDirtyFiles(updated)
-    }
+    saveFilePath(path)
   }
 
   /** Whether the current file has unsaved changes */
@@ -302,17 +421,18 @@ const App = () => {
       return
     }
 
-    // Block all other shortcuts while About is open
+    // Block all other shortcuts while About or UnsavedModal is open
     if (showAbout()) return
+    if (pendingAction() !== null) return
 
     // Ctrl+B = switch focus between tree and editor (disabled in single-file mode)
     if (key.ctrl && key.name === "b" && !singleFileMode) {
       toggleSidebar()
     }
 
-    // Ctrl+Q = exit
+    // Ctrl+Q = exit (with unsaved changes check)
     if (key.ctrl && key.name === "q") {
-      renderer.destroy()
+      requestExit()
     }
 
     // Ctrl+S = save current file
@@ -323,7 +443,7 @@ const App = () => {
     // Ctrl+W = close active tab
     if (key.ctrl && key.name === "w") {
       const active = openFile()
-      if (active) closeTab(active)
+      if (active) requestCloseTab(active)
     }
 
     // Ctrl+PageDown = next tab
@@ -414,6 +534,61 @@ const App = () => {
     )
   }
 
+  // -- Unsaved changes modal --
+
+  /** Build the modal message based on the pending action */
+  const unsavedModalMessage = () => {
+    const action = pendingAction()
+    if (!action) return ""
+    if (action.type === "closeTab") {
+      return `"${basename(action.path)}" has unsaved changes.`
+    }
+    // quit — count all dirty files
+    const count = dirtyFiles().size
+    if (count === 1) {
+      const path = [...dirtyFiles()][0]
+      return `"${basename(path)}" has unsaved changes.`
+    }
+    return `${count} files have unsaved changes.`
+  }
+
+  /** Save handler for the modal */
+  const handleModalSave = () => {
+    const action = pendingAction()
+    if (!action) return
+    setPendingAction(null)
+
+    if (action.type === "closeTab") {
+      saveFilePath(action.path)
+      forceCloseTab(action.path)
+    } else {
+      // quit — save all dirty files
+      for (const path of dirtyFiles()) {
+        saveFilePath(path)
+      }
+      renderer.destroy()
+    }
+  }
+
+  /** Discard handler for the modal */
+  const handleModalDiscard = () => {
+    const action = pendingAction()
+    if (!action) return
+    setPendingAction(null)
+
+    if (action.type === "closeTab") {
+      forceCloseTab(action.path)
+    } else {
+      // quit — discard all, just exit
+      renderer.destroy()
+    }
+  }
+
+  /** Cancel handler for the modal */
+  const handleModalCancel = () => {
+    setPendingAction(null)
+  }
+
   // -- Render --
 
   // Single-file mode: no sidebar, no tabs — just title bar + editor + status bar
@@ -424,7 +599,7 @@ const App = () => {
           titlePath={SINGLE_FILE!}
           termWidth={dimensions().width}
           termHeight={dimensions().height}
-          onExit={() => renderer.destroy()}
+          onExit={requestExit}
           onSave={saveFile}
           onUndo={() => {
             const h = editorHandle()
@@ -461,6 +636,11 @@ const App = () => {
                 setCursorCol(col)
               }}
               onHandle={setEditorHandle}
+              initialCursorRow={activeTabCache()?.cursorRow}
+              initialCursorCol={activeTabCache()?.cursorCol}
+              initialScrollTop={activeTabCache()?.scrollTop}
+              initialScrollLeft={activeTabCache()?.scrollLeft}
+              initialHistoryState={activeTabCache()?.historyState}
             />
           </ErrorBoundary>
         </box>
@@ -476,6 +656,13 @@ const App = () => {
         />
 
         <AboutModal />
+        <UnsavedModal
+          open={pendingAction() !== null}
+          message={unsavedModalMessage()}
+          onSave={handleModalSave}
+          onDiscard={handleModalDiscard}
+          onCancel={handleModalCancel}
+        />
       </box>
     )
   }
@@ -487,11 +674,11 @@ const App = () => {
         titlePath={CWD}
         termWidth={dimensions().width}
         termHeight={dimensions().height}
-        onExit={() => renderer.destroy()}
+        onExit={requestExit}
         onSave={saveFile}
         onCloseTab={() => {
           const active = openFile()
-          if (active) closeTab(active)
+          if (active) requestCloseTab(active)
         }}
         onToggleSidebar={toggleSidebar}
         onNextTab={switchToNextTab}
@@ -584,7 +771,7 @@ const App = () => {
             activeTab={openFile()}
             dirtyFiles={dirtyFiles()}
             onSelect={switchTab}
-            onClose={closeTab}
+            onClose={requestCloseTab}
             onPin={pinTab}
           />
           <ErrorBoundary
@@ -608,6 +795,11 @@ const App = () => {
                 setCursorCol(col)
               }}
               onHandle={setEditorHandle}
+              initialCursorRow={activeTabCache()?.cursorRow}
+              initialCursorCol={activeTabCache()?.cursorCol}
+              initialScrollTop={activeTabCache()?.scrollTop}
+              initialScrollLeft={activeTabCache()?.scrollLeft}
+              initialHistoryState={activeTabCache()?.historyState}
             />
           </ErrorBoundary>
         </box>
@@ -624,6 +816,13 @@ const App = () => {
       />
 
       <AboutModal />
+      <UnsavedModal
+        open={pendingAction() !== null}
+        message={unsavedModalMessage()}
+        onSave={handleModalSave}
+        onDiscard={handleModalDiscard}
+        onCancel={handleModalCancel}
+      />
     </box>
   )
 }

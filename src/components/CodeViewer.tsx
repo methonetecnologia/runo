@@ -23,7 +23,7 @@ import { useCursor } from "../hooks/useCursor"
 import { useEditing } from "../hooks/useEditing"
 import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
-import { useHistory, type EditType } from "../hooks/useHistory"
+import { useHistory, type EditType, type HistoryState } from "../hooks/useHistory"
 import { useSelection } from "../hooks/useSelection"
 import { copyToClipboard, pasteFromClipboard } from "../lib/clipboard"
 import { log } from "../lib/logger"
@@ -32,6 +32,14 @@ import CursorChar from "./CursorChar"
 export interface CodeViewerHandle {
   undo: () => void
   redo: () => void
+  /** Get current scroll position for caching when switching tabs */
+  getScrollPosition: () => { scrollTop: number; scrollLeft: number }
+  /** Get current cursor position (0-based) for caching when switching tabs */
+  getCursorPosition: () => { row: number; col: number }
+  /** Snapshot undo/redo history for per-tab caching */
+  getHistoryState: () => HistoryState
+  /** Restore a previously saved undo/redo history */
+  setHistoryState: (state: HistoryState) => void
 }
 
 interface CodeViewerProps {
@@ -48,6 +56,13 @@ interface CodeViewerProps {
   onCursorChange?: (line: number, col: number) => void
   /** Callback to expose imperative handle (undo/redo) */
   onHandle?: (handle: CodeViewerHandle) => void
+  /** Initial cursor/scroll position to restore when switching files */
+  initialCursorRow?: number
+  initialCursorCol?: number
+  initialScrollTop?: number
+  initialScrollLeft?: number
+  /** Saved undo/redo history to restore when switching back to this tab */
+  initialHistoryState?: HistoryState | null
 }
 
 const DEFAULT_FG = "#d4d4d4"
@@ -164,6 +179,16 @@ const CodeViewer = (props: CodeViewerProps) => {
           const e = history.redo()
           if (e) applySnapshot(e)
         },
+        getScrollPosition: () => ({
+          scrollTop: codeScrollRef?.scrollTop ?? 0,
+          scrollLeft: codeScrollRef?.scrollLeft ?? 0,
+        }),
+        getCursorPosition: () => ({
+          row: cursor.cursorRow(),
+          col: cursor.cursorCol(),
+        }),
+        getHistoryState: () => history.getState(),
+        setHistoryState: (state: HistoryState) => history.setState(state),
       })
     }
   })
@@ -199,16 +224,36 @@ const CodeViewer = (props: CodeViewerProps) => {
     const fp = props.filePath
     if (fp === lastFilePath) return
     lastFilePath = fp
-    cursor.resetCursor()
+
+    // Restore cursor position from cache props, or reset to (0,0)
+    const row = props.initialCursorRow ?? 0
+    const col = props.initialCursorCol ?? 0
+    cursor.setCursorRow(row)
+    cursor.setCursorCol(col)
+    cursor.resetBlink()
+
     selection.clearSelection()
-    history.reset(props.content, 0, 0)
-    if (codeScrollRef) {
-      codeScrollRef.scrollTop = 0
-      codeScrollRef.scrollLeft = 0
+
+    // Restore undo/redo history if cached, otherwise reset
+    if (props.initialHistoryState) {
+      history.setState(props.initialHistoryState)
+    } else {
+      history.reset(props.content, row, col)
     }
-    if (gutterScrollRef) {
-      gutterScrollRef.scrollTop = 0
-    }
+
+    // Restore scroll position from cache props, or reset to 0
+    // Use setTimeout to ensure content has rendered before scrolling
+    const scrollTop = props.initialScrollTop ?? 0
+    const scrollLeft = props.initialScrollLeft ?? 0
+    setTimeout(() => {
+      if (codeScrollRef) {
+        codeScrollRef.scrollTop = scrollTop
+        codeScrollRef.scrollLeft = scrollLeft
+      }
+      if (gutterScrollRef) {
+        gutterScrollRef.scrollTop = scrollTop
+      }
+    }, 20)
   })
 
   // -- Mouse drag handling --

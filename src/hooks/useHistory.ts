@@ -13,10 +13,18 @@ import { log } from "../lib/logger"
 const h = log.history
 
 /** A single history entry: content + cursor position */
-interface HistoryEntry {
+export interface HistoryEntry {
   content: string
   cursorRow: number
   cursorCol: number
+}
+
+/** Serializable snapshot of the full history state (for per-tab caching) */
+export interface HistoryState {
+  undoStack: HistoryEntry[]
+  redoStack: HistoryEntry[]
+  lastPushTime: number
+  lastEditType: EditType | null
 }
 
 /** Edit types that control undo grouping */
@@ -35,6 +43,10 @@ export interface UseHistoryReturn {
   undo: () => HistoryEntry | null
   redo: () => HistoryEntry | null
   reset: (content: string, cursorRow: number, cursorCol: number) => void
+  /** Snapshot the full history state (for per-tab caching) */
+  getState: () => HistoryState
+  /** Restore a previously saved history state */
+  setState: (state: HistoryState) => void
 }
 
 export function useHistory(): UseHistoryReturn {
@@ -118,5 +130,20 @@ export function useHistory(): UseHistoryReturn {
     h.info({ contentLen: content.length }, "reset")
   }
 
-  return { push, undo, redo, reset }
+  const getState = (): HistoryState => ({
+    undoStack: [...undoStack],
+    redoStack: [...redoStack],
+    lastPushTime,
+    lastEditType,
+  })
+
+  const setState = (state: HistoryState) => {
+    undoStack = [...state.undoStack]
+    redoStack = [...state.redoStack]
+    lastPushTime = state.lastPushTime
+    lastEditType = state.lastEditType
+    h.info({ undo: undoStack.length, redo: redoStack.length }, "setState (restored)")
+  }
+
+  return { push, undo, redo, reset, getState, setState }
 }
