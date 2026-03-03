@@ -20,14 +20,22 @@ Runo bridges that gap: **a VS Code-like experience that runs in your terminal.**
 
 ## Features
 
-- File explorer with tree navigation
-- Syntax highlighting powered by [Shiki](https://shiki.style/) (VS Code TextMate grammars)
-- Tab system with preview and pinned tabs
-- Code editing with cursor, scroll sync, and line numbers
-- Resizable sidebar with drag handle
-- Single-file mode (`--file` / `-f`) for quick editing without the full IDE layout
-- Mouse support (click, drag, hover)
-- Status bar with file info, cursor position, and keyboard shortcuts
+- **File explorer** with tree navigation, indentation guide lines, and file type icons
+- **Syntax highlighting** powered by [Shiki](https://shiki.style/) (VS Code TextMate grammars, 40+ languages)
+- **Tab system** with VS Code-style preview and pinned tabs, per-tab state caching (cursor, scroll, undo history)
+- **Code editing** with cursor, scroll sync, line numbers, and blinking block cursor
+- **Undo/redo** with VS Code-style edit grouping (consecutive similar edits grouped into a single entry)
+- **Text selection** via keyboard (`Shift+Arrow`, `Ctrl+A`), mouse drag, and gutter line selection
+- **Clipboard integration** — copy, cut, paste with system clipboard (Wayland, X11, macOS, OSC 52 fallback)
+- **Unsaved changes warning** modal when closing tabs or quitting with dirty files
+- **Binary file detection** — blocks binary files from being opened in the editor
+- **Menu bar** with File, Edit, View, and Help dropdown menus
+- **Toggle sidebar** — show/hide the file explorer (`Ctrl+B`)
+- **Resizable sidebar** with mouse drag handle
+- **Single-file mode** (`--file` / `-f`) for quick editing without the full IDE layout
+- **Mouse support** — click, drag, hover, gutter click/drag, resize handle drag
+- **Status bar** with file info, cursor position, line count, and contextual hints
+- **Self-update** via `runo upgrade`
 
 ## Built with AI
 
@@ -57,16 +65,30 @@ Runo's rendering layer depends entirely on **OpenTUI** (`@opentui/core` + `@open
 
 ```
 src/
-  index.tsx              # Entry point, app layout, state management
+  index.tsx                # Entry point, app layout, state management
+  cli.ts                   # CLI argument parsing, subcommands
   components/
-    FileTree.tsx          # Sidebar file explorer
-    CodeViewer.tsx        # Editor panel (gutter + code + cursor)
-    TabBar.tsx            # Tab management (preview/pinned)
-    StatusBar.tsx         # Bottom status bar
+    CodeViewer.tsx          # Editor panel (gutter + code + cursor + selection)
+    CursorChar.tsx          # Isolated cursor blink character
+    FileTree.tsx            # Sidebar file explorer with guide lines
+    MenuDropdown.tsx        # Dropdown menu overlay
+    StatusBar.tsx           # Bottom status bar
+    TabBar.tsx              # Tab management (preview/pinned)
+    TitleBar.tsx            # Title bar with menus and close button
+    UnsavedModal.tsx        # Unsaved changes confirmation modal
+  hooks/
+    useCursor.ts            # Cursor position and blink timer
+    useEditing.ts           # Text editing operations
+    useHighlight.ts         # Shiki syntax highlighting with debounce
+    useHistory.ts           # Undo/redo with VS Code-style edit grouping
+    useScrollSync.ts        # Gutter and code scroll synchronization
+    useSelection.ts         # Text selection (anchor/head model)
   lib/
-    files.ts              # Filesystem utilities (scan, read, write)
-    highlighter.ts        # Shiki highlighter singleton
-    scrollbox.ts          # OpenTUI scrollbox patches
+    clipboard.ts            # System clipboard integration
+    files.ts                # Filesystem utilities (scan, read, write, binary detection)
+    highlighter.ts          # Shiki highlighter singleton
+    logger.ts               # Pino file-based logger
+    scrollbox.ts            # OpenTUI scrollbox patches
 ```
 
 ## Installation
@@ -116,15 +138,44 @@ runo -f ./path/to/file.ts
 
 ### Keyboard Shortcuts
 
-| Shortcut            | Action                                   |
-| ------------------- | ---------------------------------------- |
-| `Tab`               | Switch focus between explorer and editor |
-| `j` / `k` or arrows | Navigate file tree / move cursor         |
-| `Enter`             | Open file / toggle directory             |
-| `h` / `l`           | Collapse / expand directory              |
-| `Ctrl+S`            | Save current file                        |
-| `Ctrl+W`            | Close active tab                         |
-| `Ctrl+C`            | Exit                                     |
+#### General
+
+| Shortcut        | Action                    |
+| --------------- | ------------------------- |
+| `Ctrl+Q`        | Exit (with unsaved check) |
+| `Ctrl+S`        | Save current file         |
+| `Ctrl+W`        | Close active tab          |
+| `Ctrl+B`        | Toggle sidebar visibility |
+| `Ctrl+PageDown` | Next tab                  |
+| `Ctrl+PageUp`   | Previous tab              |
+
+#### Editor
+
+| Shortcut               | Action                             |
+| ---------------------- | ---------------------------------- |
+| `Ctrl+Z`               | Undo                               |
+| `Ctrl+Y`               | Redo                               |
+| `Ctrl+Shift+Z`         | Redo (alternative)                 |
+| `Ctrl+A`               | Select all                         |
+| `Ctrl+C`               | Copy selection                     |
+| `Ctrl+X`               | Cut selection                      |
+| `Ctrl+V`               | Paste from clipboard               |
+| `Arrow keys`           | Move cursor                        |
+| `Home` / `End`         | Start / end of line                |
+| `PageUp` / `PageDown`  | Move cursor by page                |
+| `Shift+Arrow`          | Extend selection                   |
+| `Shift+Home` / `End`   | Extend selection to line start/end |
+| `Tab`                  | Insert indentation (2 spaces)      |
+| `Enter`                | Insert newline                     |
+| `Backspace` / `Delete` | Delete character or selection      |
+
+#### File Explorer
+
+| Shortcut            | Action                       |
+| ------------------- | ---------------------------- |
+| `j` / `k` or arrows | Navigate file tree           |
+| `Enter`             | Open file / toggle directory |
+| `h` / `l`           | Collapse / expand directory  |
 
 ## Development
 

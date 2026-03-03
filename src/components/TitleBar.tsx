@@ -55,7 +55,7 @@ const TitleBar = (props: TitleBarProps) => {
     if (items.length > 0) {
       items.push({ label: "", separator: true })
     }
-    items.push({ label: "Exit", shortcut: "Ctrl+C", action: props.onExit })
+    items.push({ label: "Exit", shortcut: "Ctrl+Q", action: props.onExit })
     return items
   }
 
