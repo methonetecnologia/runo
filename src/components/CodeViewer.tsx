@@ -25,6 +25,7 @@ import { useScrollSync } from "../hooks/useScrollSync"
 import { useHighlight } from "../hooks/useHighlight"
 import { useHistory, type EditType } from "../hooks/useHistory"
 import { useSelection } from "../hooks/useSelection"
+import { copyToClipboard, pasteFromClipboard } from "../lib/clipboard"
 import { log } from "../lib/logger"
 import CursorChar from "./CursorChar"
 
@@ -412,7 +413,9 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (key.ctrl && key.name === "c") {
       const text = getSelectedText()
       if (text) {
-        renderer.copyToClipboardOSC52(text)
+        copyToClipboard(text).then((ok) => {
+          if (!ok) renderer.copyToClipboardOSC52(text)
+        })
         log.editor.info({ len: text.length }, "Copied to clipboard")
       }
       return
@@ -422,12 +425,32 @@ const CodeViewer = (props: CodeViewerProps) => {
     if (key.ctrl && key.name === "x") {
       const text = getSelectedText()
       if (text) {
-        renderer.copyToClipboardOSC52(text)
+        copyToClipboard(text).then((ok) => {
+          if (!ok) renderer.copyToClipboardOSC52(text)
+        })
         deleteSelectionIfActive()
         pushHistory("delete")
         setTimeout(scroll.scrollToCursor, 10)
         log.editor.info({ len: text.length }, "Cut to clipboard")
       }
+      return
+    }
+
+    // Ctrl+V = Paste from system clipboard
+    if (key.ctrl && key.name === "v") {
+      pasteFromClipboard().then((text) => {
+        if (!text) return
+        if (selection.hasSelection()) {
+          const range = selection.getRange()!
+          selection.clearSelection()
+          editing.replaceRange(range.start.row, range.start.col, range.end.row, range.end.col, text)
+        } else {
+          editing.insertPaste(text)
+        }
+        pushHistory("paste")
+        cursor.resetBlink()
+        setTimeout(scroll.scrollToCursor, 10)
+      })
       return
     }
 

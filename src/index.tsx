@@ -310,8 +310,8 @@ const App = () => {
       toggleSidebar()
     }
 
-    // Ctrl+C = exit
-    if (key.ctrl && key.name === "c") {
+    // Ctrl+Q = exit
+    if (key.ctrl && key.name === "q") {
       renderer.destroy()
     }
 
@@ -631,7 +631,7 @@ const App = () => {
 /** Render with OpenTUI runtime options */
 render(App, {
   targetFps: 30,
-  exitOnCtrlC: true,
+  exitOnCtrlC: false,
   useMouse: true,
   enableMouseMovement: true,
   consoleOptions: {
